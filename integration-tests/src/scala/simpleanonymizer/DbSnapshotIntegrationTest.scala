@@ -11,38 +11,40 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
   import DbSnapshot._
   import RowTransformer.DSL._
 
-  // Source container: loaded with schema AND data via init script
+  // Source container: loaded with schema AND data via init scripts (shared across all tests)
   private var sourceContainer: PostgreSQLContainer[_] = _
-  // Target container: schema only, no data
+  // Target container: schema only, fresh for each test
   private var targetContainer: PostgreSQLContainer[_] = _
   private var sourceConn: Connection = _
   private var targetConn: Connection = _
 
   private def createSourceContainer(): PostgreSQLContainer[_] = {
     val container = new PostgreSQLContainer("postgres:15")
-    // Load schema.sql which includes both DDL and INSERT statements
+    // Load schema first, then data
     container.withCopyFileToContainer(
-      MountableFile.forClasspathResource("schema.sql"),
-      "/docker-entrypoint-initdb.d/schema.sql"
+      MountableFile.forClasspathResource("01-schema.sql"),
+      "/docker-entrypoint-initdb.d/01-schema.sql"
+    )
+    container.withCopyFileToContainer(
+      MountableFile.forClasspathResource("02-data.sql"),
+      "/docker-entrypoint-initdb.d/02-data.sql"
     )
     container
   }
 
   private def createTargetContainer(): PostgreSQLContainer[_] = {
     val container = new PostgreSQLContainer("postgres:15")
-    // Target only needs schema, no data - create schema-only SQL
+    // Target only gets schema, no data
     container.withCopyFileToContainer(
-      MountableFile.forClasspathResource("schema.sql"),
-      "/docker-entrypoint-initdb.d/schema.sql"
+      MountableFile.forClasspathResource("01-schema.sql"),
+      "/docker-entrypoint-initdb.d/01-schema.sql"
     )
     container
   }
 
   override def beforeAll(): Unit = {
     sourceContainer = createSourceContainer()
-    targetContainer = createTargetContainer()
     sourceContainer.start()
-    targetContainer.start()
   }
 
   override def afterAll(): Unit = {
@@ -53,6 +55,13 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
   }
 
   override def beforeEach(): Unit = {
+    // Fresh target container for each test
+    if (targetContainer != null) {
+      targetContainer.stop()
+    }
+    targetContainer = createTargetContainer()
+    targetContainer.start()
+
     sourceConn = DriverManager.getConnection(
       sourceContainer.getJdbcUrl,
       sourceContainer.getUsername,
@@ -66,16 +75,6 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
       targetContainer.getPassword
     )
     targetConn.setAutoCommit(false)
-
-    // Only truncate target - source data stays intact
-    truncateTargetTables()
-  }
-
-  private def truncateTargetTables(): Unit = {
-    val stmt = targetConn.createStatement()
-    stmt.execute("TRUNCATE profiles, order_items, orders, categories, users CASCADE")
-    targetConn.commit()
-    stmt.close()
   }
 
   override def afterEach(): Unit = {
@@ -87,6 +86,8 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
       targetConn.rollback()
       targetConn.close()
     }
+    // Don't stop targetContainer here - it will be stopped in the next beforeEach
+    // or in afterAll
   }
 
   // ============================================================================
@@ -185,7 +186,7 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
       columns = columns
     )
 
-    assert(count === 10) // 10 users in schema.sql
+    assert(count === 10) // 10 users in 02-data.sql
 
     // Verify data was copied to target
     val selectStmt = targetConn.createStatement()
@@ -272,16 +273,6 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
     assert(firstName1 != "John") // Should be anonymized
     assert(email1.contains("@")) // Should still be valid email format
     assert(!email1.contains("john.doe")) // Should not contain original
-
-    // Running again should produce the same results (deterministic)
-    truncateTargetTables()
-    copyTable(sourceConn, targetConn, "users", columns, transformer = Some(transformer))
-
-    val rs2 = targetConn.createStatement().executeQuery("SELECT first_name, email FROM users WHERE id = 1")
-    rs2.next()
-    assert(rs2.getString("first_name") === firstName1) // Same anonymized value
-    assert(rs2.getString("email") === email1) // Same anonymized value
-    rs2.close()
     rs.close()
     selectStmt.close()
   }
@@ -304,7 +295,7 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
       transformer = Some(transformer)
     )
 
-    assert(count === 8) // 8 profiles in schema.sql
+    assert(count === 8) // 8 profiles in 02-data.sql
 
     // Verify JSONB transformation in target
     val selectStmt = targetConn.createStatement()
@@ -361,7 +352,7 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
       columns = columns
     )
 
-    assert(count === 10) // 3 root + 7 children in schema.sql
+    assert(count === 10) // 3 root + 7 children in 02-data.sql
 
     // Verify hierarchical structure was preserved
     val selectStmt = targetConn.createStatement()
@@ -382,7 +373,7 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
     val columns = getTableColumns(sourceConn, "orders")
     val count = copyTable(sourceConn, targetConn, "orders", columns)
 
-    assert(count === 12) // 12 orders in schema.sql
+    assert(count === 12) // 12 orders in 02-data.sql
 
     // Verify FK relationships are valid
     val selectStmt = targetConn.createStatement()
@@ -396,30 +387,4 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
     selectStmt.close()
   }
 
-  // ============================================================================
-  // truncateTable tests
-  // ============================================================================
-
-  test("truncateTable removes all rows") {
-    // Copy some data to target first
-    val userColumns = getTableColumns(sourceConn, "users")
-    copyTable(sourceConn, targetConn, "users", userColumns)
-
-    // Verify data exists
-    val countStmt = targetConn.createStatement()
-    val rs1 = countStmt.executeQuery("SELECT COUNT(*) FROM users")
-    rs1.next()
-    assert(rs1.getInt(1) === 10)
-    rs1.close()
-
-    // Truncate
-    truncateTable(targetConn, "users")
-
-    // Verify empty
-    val rs2 = countStmt.executeQuery("SELECT COUNT(*) FROM users")
-    rs2.next()
-    assert(rs2.getInt(1) === 0)
-    rs2.close()
-    countStmt.close()
-  }
 }

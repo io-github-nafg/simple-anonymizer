@@ -156,11 +156,4 @@ object DbSnapshot {
     count
   }
 
-  def truncateTable(conn: Connection, tableName: String): Unit = {
-    println(s"[DbSnapshot] Truncating table: $tableName")
-    val stmt = conn.createStatement()
-    stmt.execute(s"TRUNCATE TABLE $tableName CASCADE")
-    conn.commit()
-    stmt.close()
-  }
 }
