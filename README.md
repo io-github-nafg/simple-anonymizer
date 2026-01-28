@@ -95,42 +95,45 @@ for {
 ### High-Level Snapshot API
 
 For copying entire databases with automatic FK ordering and filter propagation.
-Requires explicit transformer definitions for all tables - the system enforces that every column is consciously handled.
+Requires explicit handling for all tables - either a transformer or explicit skip.
 
 ```scala
 import simpleanonymizer.{Snapshot, DbSnapshot}
-import simpleanonymizer.DbSnapshot.TableConfig
+import simpleanonymizer.DbSnapshot.TableSpec
+import simpleanonymizer.DbSnapshot.TableSpec.*
 import simpleanonymizer.RowTransformer.DSL.*
 import simpleanonymizer.DeterministicAnonymizer.*
 
 val snapshot = new Snapshot(sourceDb, targetDb)
 
-// Tables to skip entirely (no transformer required)
-val excludedTables = Set("audit_logs", "temp_data")
-
-// Optional: filter rows for specific tables
-val tableConfigs = Map(
-  "users" -> TableConfig(whereClause = Some("active = true"))
-)
-
-// REQUIRED: Define transformers for ALL non-excluded tables
-val transformers = Map(
-  "users" -> table(
-    "first_name" -> using(FirstName.anonymize),
-    "last_name"  -> using(LastName.anonymize),
-    "email"      -> using(Email.anonymize)
-  ),
-  "orders" -> table(
-    "description" -> passthrough,
-    "amount"      -> passthrough
-  )
-)
-
-// Copy all tables in FK order
+// Define handling for each table using TableSpec
 for {
-  result <- snapshot.copy(excludedTables, tableConfigs, transformers)
+  result <- snapshot.copy(Map(
+    "users"      -> copy(
+      table(
+        "first_name" -> using(FirstName.anonymize),
+        "last_name"  -> using(LastName.anonymize),
+        "email"      -> using(Email.anonymize)
+      ),
+      whereClause = "active = true"  // Optional filter
+    ),
+    "orders"     -> copy(table(
+      "description" -> passthrough,
+      "amount"      -> passthrough  // Type preserved (DECIMAL)
+    )),
+    "audit_logs" -> skip  // Exclude from copy
+  ))
 } yield result  // Map[tableName -> rowCount]
 ```
+
+#### TableSpec Options
+
+| Method | Description |
+|--------|-------------|
+| `skip` | Skip table entirely |
+| `copy(transformer)` | Copy with transformer |
+| `copy(transformer, whereClause)` | Copy with filter |
+| `copyAll(transformer)` | Copy all rows (ignore FK filter propagation) |
 
 If you miss a table or column, the error message includes copy-pastable code snippets:
 
@@ -144,8 +147,8 @@ Add these tables to 'transformers':
     "description" -> passthrough
   ),
 
-Or add them to 'excludedTables' to skip:
-excludedTables = Set("products", "categories")
+Or mark them as skipped in 'tableConfigs':
+"products" -> TableConfig(skip = true),
 ```
 
 ### Copy Options
@@ -210,8 +213,10 @@ for {
 
 | Transformer | Description | Example |
 |-------------|-------------|---------|
-| `passthrough` | Copy value unchanged | IDs, timestamps, non-PII |
-| `using(f)` | Apply transformation function | `using(FirstName.anonymize)` |
+| `passthrough` | Copy value unchanged (preserves original type) | IDs, timestamps, non-PII, numeric columns |
+| `using(f)` | Apply String => String transformation | `using(FirstName.anonymize)` |
+| `setNull` | Replace with null | Sensitive fields to clear |
+| `fixed(value)` | Constant replacement (any type) | `fixed("REDACTED")`, `fixed(0)` |
 | `jsonArray(field)(f)` | Transform field within JSON array | `jsonArray("number")(PhoneNumber.anonymize)` |
 | `col(name).map(f)` | Dependent transformation | `col("state").map(st => _ => fakeZipForState(st))` |
 
@@ -229,12 +234,17 @@ val transformer = table(
 
 ## Available Anonymizers
 
+Anonymizers are `String => String` functions that produce realistic fake data. They are separate from transformers (like `passthrough`, `setNull`, `fixed`) which handle type preservation.
+
 All anonymizers are in `DeterministicAnonymizer` and implement the `Anonymizer` trait:
 
 ```scala
 sealed trait Anonymizer {
   def anonymize(input: String): String
 }
+
+// Usage in DSL:
+"column" -> using(FirstName.anonymize)
 ```
 
 ### Name Anonymizers
@@ -269,12 +279,11 @@ sealed trait Anonymizer {
 
 | Anonymizer | Description | Output Example |
 |------------|-------------|----------------|
-| `Passthrough` | No change | (original value) |
-| `Null` | Replace with null | `null` |
-| `Fixed(value)` | Constant replacement | (specified value) |
 | `Redact` | Asterisks (preserves length) | "****" |
 | `PartialRedact(first, last)` | Partial masking | "Jo**oe" |
 | `LoremText` | Lorem ipsum of similar length | "lorem ipsum dolor..." |
+
+> **Note:** `passthrough`, `setNull`, and `fixed(value)` are transformers (not anonymizers) and preserve the original database type. Use them via the DSL: `passthrough`, `setNull`, `fixed("value")`.
 
 ## JSON Column Support
 
@@ -370,12 +379,17 @@ for {
 ```
 simpleanonymizer/
 ├── DeterministicAnonymizer.scala  — Anonymization functions using DataFaker
-│   ├── Sealed Anonymizer trait
+│   ├── Sealed Anonymizer trait (String => String fakers)
 │   ├── Hash-based deterministic selection
 │   └── Pre-fetched data lists for performance
 │
 ├── RowTransformer.scala           — Composable transformer DSL
-│   ├── ValueTransformer           — Leaf-level string transformations
+│   ├── ResultKind                 — Describes transformation output type
+│   │   ├── UseOriginal           — Preserves database type (passthrough)
+│   │   ├── SetNull               — Insert null
+│   │   ├── UseFixed(value)       — Fixed value of any type
+│   │   └── TransformString(f)    — String transformation
+│   ├── ValueTransformer           — Leaf-level transformations
 │   ├── JsonNav                    — JSON navigation (Direct, Field, ArrayOf)
 │   ├── ColumnSpec                 — Column specification with dependencies
 │   ├── TableTransformer           — Composes column specs
@@ -401,6 +415,8 @@ simpleanonymizer/
 │   └── groupTablesByLevel         — Group tables for parallel copy
 │
 └── FilterPropagation.scala        — WHERE clause propagation
+    ├── TableConfig                — Per-table configuration
+    ├── TableSpec                  — Combined config + transformer
     ├── generateChildWhereClause   — Derive child filter from parent
     └── computeEffectiveFilters    — Propagate filters through FKs
 ```
