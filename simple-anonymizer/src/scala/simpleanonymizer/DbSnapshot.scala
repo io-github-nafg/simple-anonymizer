@@ -25,10 +25,10 @@ object DbSnapshot {
   def getTableColumns(conn: Connection, tableName: String, schema: String = "public"): Seq[String] =
     DbMetadata.getTableColumns(conn, tableName, schema)
   def validateTransformerCoverage(
-    conn: Connection,
-    tableName: String,
-    transformer: RowTransformer.TableTransformer,
-    schema: String = "public"
+      conn: Connection,
+      tableName: String,
+      transformer: RowTransformer.TableTransformer,
+      schema: String = "public"
   ): Either[Set[String], Unit] =
     DbMetadata.validateTransformerCoverage(conn, tableName, transformer, schema)
 
@@ -42,15 +42,15 @@ object DbSnapshot {
   type TableConfig = FilterPropagation.TableConfig
   val TableConfig = FilterPropagation.TableConfig
   def generateChildWhereClause(
-    childTable: String,
-    parentFilters: Map[String, String],
-    fks: Seq[ForeignKey]
+      childTable: String,
+      parentFilters: Map[String, String],
+      fks: Seq[ForeignKey]
   ): Option[String] =
     FilterPropagation.generateChildWhereClause(childTable, parentFilters, fks)
   def computeEffectiveFilters(
-    tables: Seq[String],
-    fks: Seq[ForeignKey],
-    tableConfigs: Map[String, TableConfig]
+      tables: Seq[String],
+      fks: Seq[ForeignKey],
+      tableConfigs: Map[String, TableConfig]
   ): Map[String, Option[String]] =
     FilterPropagation.computeEffectiveFilters(tables, fks, tableConfigs)
 
@@ -69,15 +69,15 @@ object DbSnapshot {
     columnType == "jsonb" || columnType == "json"
 
   def copyTable(
-    sourceConn: Connection,
-    targetConn: Connection,
-    tableName: String,
-    columns: Seq[String],
-    whereClause: Option[String] = None,
-    limit: Option[Int] = None,
-    transformer: Option[RowTransformer.TableTransformer] = None
+      sourceConn: Connection,
+      targetConn: Connection,
+      tableName: String,
+      columns: Seq[String],
+      whereClause: Option[String] = None,
+      limit: Option[Int] = None,
+      transformer: Option[RowTransformer.TableTransformer] = None
   ): Int = {
-    val columnList   = columns.mkString(", ")
+    val columnList = columns.mkString(", ")
     val placeholders = columns.map(_ => "?").mkString(", ")
 
     // Add ORDER BY id DESC when using LIMIT for deterministic results (if the table has id column)
@@ -103,10 +103,10 @@ object DbSnapshot {
     val rs = selectStmt.executeQuery(selectSql)
 
     val insertStmt = targetConn.prepareStatement(insertSql)
-    var count      = 0
+    var count = 0
 
     // Get column types for proper JSONB handling
-    val rsMetaData  = rs.getMetaData
+    val rsMetaData = rs.getMetaData
     val columnTypes = columns.indices.map(i => rsMetaData.getColumnTypeName(i + 1))
 
     while (rs.next()) {
@@ -120,12 +120,12 @@ object DbSnapshot {
       val transformedRow = transformer.fold(rawRow)(_.transform(rawRow))
 
       for (idx <- columns.indices) {
-        val column     = columns(idx)
+        val column = columns(idx)
         val columnType = columnTypes(idx)
 
         // Use transformed value if available, otherwise raw
         val rawValue = rs.getObject(idx + 1)
-        val value    =
+        val value =
           if (transformer.exists(_.columnNames.contains(column))) {
             val transformedValue = transformedRow.getOrElse(column, null)
             if (isJsonType(columnType)) wrapJsonValue(transformedValue, columnType)

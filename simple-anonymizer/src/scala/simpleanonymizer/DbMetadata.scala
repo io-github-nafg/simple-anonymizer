@@ -13,7 +13,7 @@ object DbMetadata {
   /** Get all foreign key relationships from the database */
   def getForeignKeys(conn: Connection, schema: String = "public"): Seq[ForeignKey] = {
     val stmt = conn.createStatement()
-    val rs   = stmt.executeQuery(
+    val rs = stmt.executeQuery(
       // language=postgresql
       s"""SELECT
          |  tc.table_name AS child_table,
@@ -48,7 +48,7 @@ object DbMetadata {
   /** Get all tables in the specified schema */
   def getAllTables(conn: Connection, schema: String = "public"): Seq[String] = {
     val stmt = conn.createStatement()
-    val rs   = stmt.executeQuery(
+    val rs = stmt.executeQuery(
       // language=postgresql
       s"""SELECT table_name
          |FROM information_schema.tables
@@ -68,7 +68,7 @@ object DbMetadata {
 
   /** Get primary key columns for a table */
   def getPrimaryKeyColumns(conn: Connection, tableName: String, schema: String = "public"): Set[String] = {
-    val rs      = conn.getMetaData.getPrimaryKeys(null, schema, tableName)
+    val rs = conn.getMetaData.getPrimaryKeys(null, schema, tableName)
     val columns = mutable.Set[String]()
     while (rs.next())
       columns += rs.getString("COLUMN_NAME")
@@ -78,7 +78,7 @@ object DbMetadata {
 
   /** Get foreign key columns for a table (columns that reference other tables) */
   def getForeignKeyColumns(conn: Connection, tableName: String, schema: String = "public"): Set[String] = {
-    val rs      = conn.getMetaData.getImportedKeys(null, schema, tableName)
+    val rs = conn.getMetaData.getImportedKeys(null, schema, tableName)
     val columns = mutable.Set[String]()
     while (rs.next())
       columns += rs.getString("FKCOLUMN_NAME")
@@ -88,7 +88,7 @@ object DbMetadata {
 
   /** Get all column names for a table */
   def getTableColumns(conn: Connection, tableName: String, schema: String = "public"): Seq[String] = {
-    val metaRs  = conn.getMetaData.getColumns(null, schema, tableName, null)
+    val metaRs = conn.getMetaData.getColumns(null, schema, tableName, null)
     val columns = Iterator.continually(metaRs).takeWhile(_.next()).map(_.getString("COLUMN_NAME")).toSeq
     metaRs.close()
     columns
@@ -100,14 +100,14 @@ object DbMetadata {
     *   Left(missing columns) if validation fails, Right(()) if successful
     */
   def validateTransformerCoverage(
-    conn: Connection,
-    tableName: String,
-    transformer: RowTransformer.TableTransformer,
-    schema: String = "public"
+      conn: Connection,
+      tableName: String,
+      transformer: RowTransformer.TableTransformer,
+      schema: String = "public"
   ): Either[Set[String], Unit] = {
     val allColumns = getTableColumns(conn, tableName, schema).toSet
-    val pkColumns  = getPrimaryKeyColumns(conn, tableName, schema)
-    val fkColumns  = getForeignKeyColumns(conn, tableName, schema)
+    val pkColumns = getPrimaryKeyColumns(conn, tableName, schema)
+    val fkColumns = getForeignKeyColumns(conn, tableName, schema)
 
     // Columns that need to be covered: all columns except PK and FK
     val requiredColumns = allColumns -- pkColumns -- fkColumns

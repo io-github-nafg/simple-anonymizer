@@ -23,7 +23,7 @@ object RowTransformer {
   sealed trait ValueTransformer {
     def apply(input: String): String
   }
-  object ValueTransformer       {
+  object ValueTransformer {
     case object PassThrough extends ValueTransformer {
       def apply(input: String): String = input
     }
@@ -37,8 +37,7 @@ object RowTransformer {
   // JSON Navigation
   // ============================================================================
 
-  /** JsonNav works on JSON values internally to avoid repeated parse/encode cycles. Only the outermost layer converts
-    * to/from String.
+  /** JsonNav works on JSON values internally to avoid repeated parse/encode cycles. Only the outermost layer converts to/from String.
     */
   sealed trait JsonNav {
 
@@ -48,7 +47,7 @@ object RowTransformer {
     /** Wrap a ValueTransformer to work on JSON strings */
     def wrap(inner: ValueTransformer): ValueTransformer =
       ValueTransformer.Simple { jsonStr =>
-        val json        = parse(jsonStr).getOrElse(Json.Null)
+        val json = parse(jsonStr).getOrElse(Json.Null)
         val transformed = transformJson(json, inner)
         transformed.noSpaces
       }
@@ -57,7 +56,7 @@ object RowTransformer {
 
     case object Direct extends JsonNav {
       def transformJson(json: Json, inner: ValueTransformer): Json = {
-        val str         = json.asString.getOrElse("")
+        val str = json.asString.getOrElse("")
         val transformed = inner(str)
         Json.fromString(transformed)
       }
@@ -73,7 +72,7 @@ object RowTransformer {
             val oldValue = obj(fieldName).flatMap(_.asString).getOrElse("")
             val newValue = inner(oldValue)
             obj.add(fieldName, Json.fromString(newValue)).asJson
-          case None      => json
+          case None => json
         }
     }
 
@@ -83,7 +82,7 @@ object RowTransformer {
           case Some(arr) =>
             val transformed = arr.map(elem => elementNav.transformJson(elem, inner))
             Json.fromValues(transformed)
-          case None      => json
+          case None => json
         }
     }
   }
@@ -97,27 +96,20 @@ object RowTransformer {
     def dependsOn: Set[String]
     def transform(row: Row): String
   }
-  object ColumnSpec       {
-    case class Independent(
-      columnName: String,
-      nav: JsonNav,
-      transformer: ValueTransformer) extends ColumnSpec {
-      def dependsOn: Set[String]      = Set.empty
+  object ColumnSpec {
+    case class Independent(columnName: String, nav: JsonNav, transformer: ValueTransformer) extends ColumnSpec {
+      def dependsOn: Set[String] = Set.empty
       def transform(row: Row): String = {
         val originalValue = row.getOrElse(columnName, "")
         nav.wrap(transformer)(originalValue)
       }
     }
 
-    case class Dependent(
-      columnName: String,
-      dependencies: Set[String],
-      nav: JsonNav,
-      transformerFactory: Row => ValueTransformer) extends ColumnSpec {
-      def dependsOn: Set[String]      = dependencies
+    case class Dependent(columnName: String, dependencies: Set[String], nav: JsonNav, transformerFactory: Row => ValueTransformer) extends ColumnSpec {
+      def dependsOn: Set[String] = dependencies
       def transform(row: Row): String = {
         val originalValue = row.getOrElse(columnName, "")
-        val transformer   = transformerFactory(row)
+        val transformer = transformerFactory(row)
         nav.wrap(transformer)(originalValue)
       }
     }
@@ -148,7 +140,7 @@ object RowTransformer {
   sealed trait UnboundTransformer {
     def bindTo(columnName: String): ColumnSpec
   }
-  object UnboundTransformer       {
+  object UnboundTransformer {
 
     import ColumnSpec._
     import JsonNav.Direct

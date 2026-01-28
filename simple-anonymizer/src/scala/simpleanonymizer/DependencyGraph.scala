@@ -7,8 +7,8 @@ object DependencyGraph {
   // Use ForeignKey from DbMetadata
   type ForeignKey = DbMetadata.ForeignKey
 
-  /** Compute insertion levels for tables based on FK dependencies. Level 0 = tables with no FK dependencies (can be
-    * inserted first) Level N = tables that depend only on tables at level < N
+  /** Compute insertion levels for tables based on FK dependencies. Level 0 = tables with no FK dependencies (can be inserted first) Level N = tables that
+    * depend only on tables at level < N
     *
     * Tables at the same level can be inserted in parallel. Returns Map[tableName -> level]
     */
@@ -23,7 +23,7 @@ object DependencyGraph {
       deps.view.mapValues(_.toSet).toMap
     }
 
-    val levels  = mutable.Map[String, Int]()
+    val levels = mutable.Map[String, Int]()
     var changed = true
 
     // Initialize: tables with no dependencies are level 0

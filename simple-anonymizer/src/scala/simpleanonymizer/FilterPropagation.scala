@@ -15,21 +15,17 @@ object FilterPropagation {
     * @param copyAll
     *   If true, copy all rows (no subsetting based on FK)
     */
-  case class TableConfig(
-    whereClause: Option[String] = None,
-    skip: Boolean = false,
-    copyAll: Boolean = false)
+  case class TableConfig(whereClause: Option[String] = None, skip: Boolean = false, copyAll: Boolean = false)
 
   /** Generate a WHERE clause for a child table based on the parent table's filter.
     *
-    * For example, if parent = request has filter "created_at > '2024-01-01'" and child = request_field has FK
-    * request_field.request_id -> request.id then generates: "request_id IN (SELECT id FROM request WHERE created_at >
-    * '2024-01-01')"
+    * For example, if parent = request has filter "created_at > '2024-01-01'" and child = request_field has FK request_field.request_id -> request.id then
+    * generates: "request_id IN (SELECT id FROM request WHERE created_at > '2024-01-01')"
     */
   def generateChildWhereClause(
-    childTable: String,
-    parentFilters: Map[String, String], // parent table -> its WHERE clause
-    fks: Seq[ForeignKey]
+      childTable: String,
+      parentFilters: Map[String, String], // parent table -> its WHERE clause
+      fks: Seq[ForeignKey]
   ): Option[String] = {
     // Find FKs where this table is the child
     val relevantFks = fks.filter(_.childTable == childTable)
@@ -45,8 +41,8 @@ object FilterPropagation {
     else Some(conditions.mkString(" AND "))
   }
 
-  /** Compute effective WHERE clauses for all tables based on root filters and FK relationships. Propagates filters from
-    * parent tables to child tables through the FK graph.
+  /** Compute effective WHERE clauses for all tables based on root filters and FK relationships. Propagates filters from parent tables to child tables through
+    * the FK graph.
     *
     * @param tables
     *   All tables in insertion order (by level)
@@ -58,9 +54,9 @@ object FilterPropagation {
     *   Map of table -> effective WHERE clause
     */
   def computeEffectiveFilters(
-    tables: Seq[String],
-    fks: Seq[ForeignKey],
-    tableConfigs: Map[String, TableConfig]
+      tables: Seq[String],
+      fks: Seq[ForeignKey],
+      tableConfigs: Map[String, TableConfig]
   ): Map[String, Option[String]] = {
     val effectiveFilters = mutable.Map[String, Option[String]]()
 

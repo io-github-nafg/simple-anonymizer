@@ -94,9 +94,7 @@ class RowTransformerTest extends AnyFunSuite with TypeCheckedTripleEquals {
   test("col creates single column dependency") {
     val transformer = table(
       "gender" -> passthrough,
-      "greeting" -> col("gender").map { g =>
-        _ => if (g == "M") "Mr." else "Ms."
-      }
+      "greeting" -> col("gender").map { g => _ => if (g == "M") "Mr." else "Ms." }
     )
     val row = Map("gender" -> "M", "greeting" -> "")
     val result = transformer.transform(row)
@@ -107,9 +105,7 @@ class RowTransformerTest extends AnyFunSuite with TypeCheckedTripleEquals {
     val transformer = table(
       "first" -> passthrough,
       "last" -> passthrough,
-      "full" -> col("first").and(col("last")).map { (f, l) =>
-        _ => s"$f $l"
-      }
+      "full" -> col("first").and(col("last")).map { (f, l) => _ => s"$f $l" }
     )
     val row = Map("first" -> "John", "last" -> "Doe", "full" -> "")
     val result = transformer.transform(row)
@@ -121,9 +117,7 @@ class RowTransformerTest extends AnyFunSuite with TypeCheckedTripleEquals {
       "a" -> passthrough,
       "b" -> passthrough,
       "c" -> passthrough,
-      "combined" -> col("a").and(col("b")).and(col("c")).map { (a, b, c) =>
-        _ => s"$a-$b-$c"
-      }
+      "combined" -> col("a").and(col("b")).and(col("c")).map { (a, b, c) => _ => s"$a-$b-$c" }
     )
     val row = Map("a" -> "1", "b" -> "2", "c" -> "3", "combined" -> "")
     val result = transformer.transform(row)
