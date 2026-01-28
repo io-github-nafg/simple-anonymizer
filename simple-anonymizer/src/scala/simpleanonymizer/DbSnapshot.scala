@@ -54,6 +54,20 @@ object DbSnapshot {
   ): Map[String, Option[String]] =
     FilterPropagation.computeEffectiveFilters(tables, fks, tableConfigs)
 
+  /** Wrap a string value as a PGobject for JSON/JSONB columns */
+  private def wrapJsonValue(value: String, columnType: String): AnyRef =
+    if (value == null) null
+    else {
+      val jsonObj = new PGobject()
+      jsonObj.setType(columnType)
+      jsonObj.setValue(value)
+      jsonObj
+    }
+
+  /** Check if a column type is JSON or JSONB */
+  private def isJsonType(columnType: String): Boolean =
+    columnType == "jsonb" || columnType == "json"
+
   def copyTable(
     sourceConn: Connection,
     targetConn: Connection,
@@ -114,14 +128,8 @@ object DbSnapshot {
         val value    =
           if (transformer.exists(_.columnNames.contains(column))) {
             val transformedValue = transformedRow.getOrElse(column, null)
-            // Handle JSONB columns - need to wrap in a PGobject
-            if ((columnType == "jsonb" || columnType == "json") && transformedValue != null) {
-              val jsonObj = new PGobject()
-              jsonObj.setType(columnType)
-              jsonObj.setValue(transformedValue)
-              jsonObj
-            } else
-              transformedValue
+            if (isJsonType(columnType)) wrapJsonValue(transformedValue, columnType)
+            else transformedValue
           } else
             rawValue
 
