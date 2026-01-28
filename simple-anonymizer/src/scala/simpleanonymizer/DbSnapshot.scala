@@ -121,6 +121,9 @@ object DbSnapshot {
   type TableConfig = FilterPropagation.TableConfig
   val TableConfig = FilterPropagation.TableConfig
 
+  type TableSpec = FilterPropagation.TableSpec
+  val TableSpec = FilterPropagation.TableSpec
+
   def generateChildWhereClause(
       childTable: String,
       parentFilters: Map[String, String],

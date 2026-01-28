@@ -4,39 +4,57 @@ import scala.concurrent.{ExecutionContext, Future}
 
 /** High-level orchestrator for copying a database snapshot with subsetting and anonymization.
   *
-  * Requires explicit transformer definitions for all tables except those marked with `skip = true`. This ensures every column is consciously handled.
+  * Requires explicit handling for all tables - either a transformer or explicit skip. This ensures every column is consciously handled.
   *
   * @example
   *   {{{
+  * import simpleanonymizer.DbSnapshot.TableSpec
+  * import simpleanonymizer.DbSnapshot.TableSpec._
+  *
   * val snapshot = new Snapshot(sourceDb, targetDb)
   *
-  * val tableConfigs = Map(
-  *   "users" -> TableConfig(whereClause = Some("active = true")),
-  *   "audit_logs" -> TableConfig(skip = true)
-  * )
-  *
-  * val transformers = Map(
-  *   "users" -> table(
-  *     "first_name" -> using(FirstName.anonymize),
-  *     "last_name"  -> using(LastName.anonymize),
-  *     "email"      -> using(Email.anonymize)
-  *   ),
-  *   "orders" -> table(
-  *     "description" -> passthrough,
-  *     "amount"      -> passthrough
-  *   )
-  * )
-  *
+  * // Preferred API: single map with TableSpec
   * for {
-  *   result <- snapshot.copy(tableConfigs, transformers)
+  *   result <- snapshot.copy(Map(
+  *     "users"      -> copy(table("first_name" -> using(FirstName.anonymize), ...), whereClause = "active = true"),
+  *     "orders"     -> copy(table("description" -> passthrough, ...)),
+  *     "audit_logs" -> skip
+  *   ))
   * } yield result  // Map[tableName -> rowCount]
+  *
+  * // Alternative API: separate tableConfigs and transformers maps
+  * for {
+  *   result <- snapshot.copy(
+  *     tableConfigs = Map("audit_logs" -> TableConfig(skip = true)),
+  *     transformers = Map("users" -> table(...), "orders" -> table(...))
+  *   )
+  * } yield result
   *   }}}
   */
 class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.Database, schema: String = "public")(implicit
     ec: ExecutionContext
 ) {
   import DbSnapshot._
+  import FilterPropagation.TableSpec
   import SlickProfile.api.DBIO
+
+  /** Copy all tables from source to target with transformation (preferred API).
+    *
+    * Tables are copied in topological order based on FK dependencies. Filters are automatically propagated from parent tables to child tables through FK
+    * relationships.
+    *
+    * @param tableSpecs
+    *   Specification for each table: `skip` to exclude, `copy(transformer)` to include
+    * @return
+    *   Map of table name to number of rows copied
+    * @throws IllegalArgumentException
+    *   if any table in the database is not specified, or if a transformer is missing columns. Error messages include copy-pastable code snippets.
+    */
+  def copy(tableSpecs: Map[String, TableSpec]): Future[Map[String, Int]] = {
+    val tableConfigs = tableSpecs.view.mapValues(_.config).toMap
+    val transformers = tableSpecs.collect { case (name, spec) if spec.transformer.isDefined => name -> spec.transformer.get }
+    copy(tableConfigs, transformers)
+  }
 
   /** Copy all tables from source to target with transformation.
     *

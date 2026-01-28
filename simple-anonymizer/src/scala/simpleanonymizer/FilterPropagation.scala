@@ -17,6 +17,50 @@ object FilterPropagation {
     */
   case class TableConfig(whereClause: Option[String] = None, skip: Boolean = false, copyAll: Boolean = false)
 
+  /** Specification for how to handle a table during snapshot copy.
+    *
+    * Use the companion object methods to create:
+    *   - `TableSpec.skip` - skip this table entirely
+    *   - `TableSpec.copy(transformer)` - copy with the given transformer
+    *   - `TableSpec.copy(transformer, whereClause)` - copy with filter
+    *   - `TableSpec.copyAll(transformer)` - copy all rows, ignore FK filters
+    */
+  sealed trait TableSpec {
+    def transformer: Option[RowTransformer.TableTransformer]
+    def config: TableConfig
+  }
+  object TableSpec       {
+
+    /** Skip this table entirely */
+    case object Skip extends TableSpec {
+      def transformer: Option[RowTransformer.TableTransformer] = None
+      def config: TableConfig                                  = TableConfig(skip = true)
+    }
+
+    /** Copy with the given transformer */
+    case class Copy(
+        t: RowTransformer.TableTransformer,
+        whereClause: Option[String] = None,
+        copyAll: Boolean = false
+    ) extends TableSpec {
+      def transformer: Option[RowTransformer.TableTransformer] = Some(t)
+      def config: TableConfig                                  = TableConfig(whereClause = whereClause, copyAll = copyAll)
+    }
+
+    /** Skip this table entirely */
+    def skip: TableSpec = Skip
+
+    /** Copy with the given transformer */
+    def copy(transformer: RowTransformer.TableTransformer): TableSpec = Copy(transformer)
+
+    /** Copy with the given transformer and where clause filter */
+    def copy(transformer: RowTransformer.TableTransformer, whereClause: String): TableSpec =
+      Copy(transformer, whereClause = Some(whereClause))
+
+    /** Copy all rows (ignore FK propagation filters) */
+    def copyAll(transformer: RowTransformer.TableTransformer): TableSpec = Copy(transformer, copyAll = true)
+  }
+
   /** Generate a WHERE clause for a child table based on the parent table's filter.
     *
     * For example, if parent = request has filter "created_at > '2024-01-01'" and child = request_field has FK request_field.request_id -> request.id then

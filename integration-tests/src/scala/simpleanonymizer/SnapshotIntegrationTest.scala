@@ -12,7 +12,8 @@ import SlickProfile.api._
   * These tests serve as working examples of how to use the library. The focus is on clean, readable code that shows typical usage patterns.
   */
 class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAll {
-  import DbSnapshot.TableConfig
+  import DbSnapshot.{TableConfig, TableSpec}
+  import DbSnapshot.TableSpec._
   import DeterministicAnonymizer._
   import RowTransformer.DSL._
 
@@ -109,7 +110,27 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
   }
 
   // ---------------------------------------------------------------------------
-  // Example: Minimal passthrough for non-PII tables
+  // Example: Combined API using TableSpec (cleaner, recommended)
+  // ---------------------------------------------------------------------------
+
+  test("copy with combined TableSpec API") { snapshot =>
+    // Single map with both transformer and config combined
+    for {
+      result <- snapshot.copy(
+                  Map(
+                    "users"       -> skip,
+                    "orders"      -> skip,
+                    "order_items" -> skip,
+                    "profiles"    -> skip,
+                    "categories"  -> copy(table("name" -> passthrough))
+                  )
+                )
+      _      <- assert(result("categories") == 10, "Should copy all 10 categories")
+    } yield succeed
+  }
+
+  // ---------------------------------------------------------------------------
+  // Example: Minimal passthrough for non-PII tables (legacy API)
   // ---------------------------------------------------------------------------
 
   test("passthrough for tables without sensitive data") { snapshot =>
