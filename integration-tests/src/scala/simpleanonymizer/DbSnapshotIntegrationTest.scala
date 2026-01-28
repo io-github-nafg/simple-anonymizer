@@ -27,13 +27,11 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
 
   private lazy val sourceDb: Database = sourceContainer.slickDatabase(SlickProfile.backend)
 
-  override def beforeAll(): Unit = {
+  override def beforeAll(): Unit =
     sourceContainer.start()
-  }
 
-  override def afterAll(): Unit = {
+  override def afterAll(): Unit =
     sourceContainer.stop()
-  }
 
   // Fixture: fresh target database for each test
   type FixtureParam = Database
@@ -45,7 +43,7 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
       "/docker-entrypoint-initdb.d/01-schema.sql"
     )
     targetContainer.start()
-    val targetDb = targetContainer.slickDatabase(SlickProfile.backend)
+    val targetDb        = targetContainer.slickDatabase(SlickProfile.backend)
 
     complete {
       withFixture(test.toNoArgAsyncTest(targetDb))
@@ -63,10 +61,10 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
     // Should find: orders->users, order_items->orders, categories->categories, profiles->users
     for {
       fks <- sourceDb.run(getForeignKeys())
-      _ <- assert(fks.exists(fk => fk.fkTable.name == "orders" && fk.pkTable.name == "users"))
-      _ <- assert(fks.exists(fk => fk.fkTable.name == "order_items" && fk.pkTable.name == "orders"))
-      _ <- assert(fks.exists(fk => fk.fkTable.name == "categories" && fk.pkTable.name == "categories"))
-      _ <- assert(fks.exists(fk => fk.fkTable.name == "profiles" && fk.pkTable.name == "users"))
+      _   <- assert(fks.exists(fk => fk.fkTable.name == "orders" && fk.pkTable.name == "users"))
+      _   <- assert(fks.exists(fk => fk.fkTable.name == "order_items" && fk.pkTable.name == "orders"))
+      _   <- assert(fks.exists(fk => fk.fkTable.name == "categories" && fk.pkTable.name == "categories"))
+      _   <- assert(fks.exists(fk => fk.fkTable.name == "profiles" && fk.pkTable.name == "users"))
     } yield succeed
   }
 
@@ -77,11 +75,11 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
   test("getAllTables returns all tables in schema") { _ =>
     for {
       tables <- sourceDb.run(getAllTables())
-      _ <- assert(tables.contains("users"))
-      _ <- assert(tables.contains("orders"))
-      _ <- assert(tables.contains("order_items"))
-      _ <- assert(tables.contains("categories"))
-      _ <- assert(tables.contains("profiles"))
+      _      <- assert(tables.contains("users"))
+      _      <- assert(tables.contains("orders"))
+      _      <- assert(tables.contains("order_items"))
+      _      <- assert(tables.contains("categories"))
+      _      <- assert(tables.contains("profiles"))
     } yield succeed
   }
 
@@ -92,7 +90,7 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
   test("getPrimaryKeyColumns returns PK columns") { _ =>
     for {
       pkCols <- sourceDb.run(getPrimaryKeyColumns("users"))
-      _ <- assert(pkCols === Set("id"))
+      _      <- assert(pkCols === Set("id"))
     } yield succeed
   }
 
@@ -102,10 +100,10 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
 
   test("getForeignKeyColumns returns FK columns") { _ =>
     for {
-      fkCols <- sourceDb.run(getForeignKeyColumns("orders"))
-      _ <- assert(fkCols === Set("user_id"))
+      fkCols           <- sourceDb.run(getForeignKeyColumns("orders"))
+      _                <- assert(fkCols === Set("user_id"))
       orderItemsFkCols <- sourceDb.run(getForeignKeyColumns("order_items"))
-      _ <- assert(orderItemsFkCols === Set("order_id"))
+      _                <- assert(orderItemsFkCols === Set("order_id"))
     } yield succeed
   }
 
@@ -116,7 +114,7 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
   test("getTableColumns returns all columns") { _ =>
     for {
       cols <- sourceDb.run(getTableColumns("users"))
-      _ <- assert(cols.toSet === Set("id", "first_name", "last_name", "email"))
+      _    <- assert(cols.toSet === Set("id", "first_name", "last_name", "email"))
     } yield succeed
   }
 
@@ -127,12 +125,12 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
   test("validateTransformerCoverage succeeds when all non-PK/FK columns covered") { _ =>
     val transformer = table(
       "first_name" -> passthrough,
-      "last_name" -> passthrough,
-      "email" -> passthrough
+      "last_name"  -> passthrough,
+      "email"      -> passthrough
     )
     for {
       result <- sourceDb.run(validateTransformerCoverage("users", transformer))
-      _ <- assert(result === Right(()))
+      _      <- assert(result === Right(()))
     } yield succeed
   }
 
@@ -143,9 +141,9 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
     )
     for {
       result <- sourceDb.run(validateTransformerCoverage("users", transformer))
-      _ <- assert(result.isLeft)
-      _ <- assert(result.left.getOrElse(Set.empty).contains("last_name"))
-      _ <- assert(result.left.getOrElse(Set.empty).contains("email"))
+      _      <- assert(result.isLeft)
+      _      <- assert(result.left.getOrElse(Set.empty).contains("last_name"))
+      _      <- assert(result.left.getOrElse(Set.empty).contains("email"))
     } yield succeed
   }
 
@@ -155,57 +153,57 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
 
   test("copyTable copies all users from source to target") { targetDb =>
     for {
-      columns <- sourceDb.run(getTableColumns("users"))
-      count <- copyTable(
-        sourceDb = sourceDb,
-        targetDb = targetDb,
-        tableName = "users",
-        columns = columns
-      )
-      _ <- assert(count === 10) // 10 users in 02-data.sql
+      columns     <- sourceDb.run(getTableColumns("users"))
+      count       <- copyTable(
+                       sourceDb = sourceDb,
+                       targetDb = targetDb,
+                       tableName = "users",
+                       columns = columns
+                     )
+      _           <- assert(count === 10) // 10 users in 02-data.sql
       targetCount <- targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
-      _ <- assert(targetCount === 10)
+      _           <- assert(targetCount === 10)
     } yield succeed
   }
 
   test("copyTable applies transformer") { targetDb =>
     val transformer = table(
       "first_name" -> using(_.toUpperCase),
-      "last_name" -> using(_ => "REDACTED"),
-      "email" -> using(_ => "anon@example.com")
+      "last_name"  -> using(_ => "REDACTED"),
+      "email"      -> using(_ => "anon@example.com")
     )
 
     for {
       columns <- sourceDb.run(getTableColumns("users"))
-      _ <- copyTable(
-        sourceDb = sourceDb,
-        targetDb = targetDb,
-        tableName = "users",
-        columns = columns,
-        transformer = Some(transformer)
-      )
-      result <- targetDb.run(
-        sql"SELECT first_name, last_name, email FROM users WHERE id = 1".as[(String, String, String)].head
-      )
-      _ <- assert(result._1 === "JOHN") // John -> JOHN
-      _ <- assert(result._2 === "REDACTED")
-      _ <- assert(result._3 === "anon@example.com")
+      _       <- copyTable(
+                   sourceDb = sourceDb,
+                   targetDb = targetDb,
+                   tableName = "users",
+                   columns = columns,
+                   transformer = Some(transformer)
+                 )
+      result  <- targetDb.run(
+                   sql"SELECT first_name, last_name, email FROM users WHERE id = 1".as[(String, String, String)].head
+                 )
+      _       <- assert(result._1 === "JOHN") // John -> JOHN
+      _       <- assert(result._2 === "REDACTED")
+      _       <- assert(result._3 === "anon@example.com")
     } yield succeed
   }
 
   test("copyTable with limit copies only requested number of rows") { targetDb =>
     for {
-      columns <- sourceDb.run(getTableColumns("users"))
-      count <- copyTable(
-        sourceDb = sourceDb,
-        targetDb = targetDb,
-        tableName = "users",
-        columns = columns,
-        limit = Some(3)
-      )
-      _ <- assert(count === 3)
+      columns     <- sourceDb.run(getTableColumns("users"))
+      count       <- copyTable(
+                       sourceDb = sourceDb,
+                       targetDb = targetDb,
+                       tableName = "users",
+                       columns = columns,
+                       limit = Some(3)
+                     )
+      _           <- assert(count === 3)
       targetCount <- targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
-      _ <- assert(targetCount === 3)
+      _           <- assert(targetCount === 3)
     } yield succeed
   }
 
@@ -214,26 +212,26 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
 
     val transformer = table(
       "first_name" -> using(FirstName.anonymize),
-      "last_name" -> using(LastName.anonymize),
-      "email" -> using(Email.anonymize)
+      "last_name"  -> using(LastName.anonymize),
+      "email"      -> using(Email.anonymize)
     )
 
     for {
-      columns <- sourceDb.run(getTableColumns("users"))
-      count <- copyTable(
-        sourceDb = sourceDb,
-        targetDb = targetDb,
-        tableName = "users",
-        columns = columns,
-        transformer = Some(transformer)
-      )
-      _ <- assert(count === 10)
+      columns              <- sourceDb.run(getTableColumns("users"))
+      count                <- copyTable(
+                                sourceDb = sourceDb,
+                                targetDb = targetDb,
+                                tableName = "users",
+                                columns = columns,
+                                transformer = Some(transformer)
+                              )
+      _                    <- assert(count === 10)
       (firstName1, email1) <- targetDb.run(
-        sql"SELECT first_name, email FROM users WHERE id = 1".as[(String, String)].head
-      )
-      _ <- assert(firstName1 != "John") // Should be anonymized
-      _ <- assert(email1.contains("@")) // Should still be valid email format
-      _ <- assert(!email1.contains("john.doe")) // Should not contain original
+                                sql"SELECT first_name, email FROM users WHERE id = 1".as[(String, String)].head
+                              )
+      _                    <- assert(firstName1 != "John")         // Should be anonymized
+      _                    <- assert(email1.contains("@"))         // Should still be valid email format
+      _                    <- assert(!email1.contains("john.doe")) // Should not contain original
     } yield succeed
   }
 
@@ -245,21 +243,21 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
     for {
       // First copy users to target (needed for FK)
       userColumns <- sourceDb.run(getTableColumns("users"))
-      _ <- copyTable(sourceDb, targetDb, "users", userColumns)
+      _           <- copyTable(sourceDb, targetDb, "users", userColumns)
       // Now copy profiles with transformation
-      columns <- sourceDb.run(getTableColumns("profiles"))
-      count <- copyTable(
-        sourceDb = sourceDb,
-        targetDb = targetDb,
-        tableName = "profiles",
-        columns = columns,
-        transformer = Some(transformer)
-      )
-      _ <- assert(count === 8) // 8 profiles in 02-data.sql
-      phones <- targetDb.run(sql"SELECT phones FROM profiles WHERE user_id = 1".as[String].head)
-      _ <- assert(phones.contains("XXX-XXXX"))
-      _ <- assert(!phones.contains("555-0101"))
-      _ <- assert(!phones.contains("555-0102"))
+      columns     <- sourceDb.run(getTableColumns("profiles"))
+      count       <- copyTable(
+                       sourceDb = sourceDb,
+                       targetDb = targetDb,
+                       tableName = "profiles",
+                       columns = columns,
+                       transformer = Some(transformer)
+                     )
+      _           <- assert(count === 8) // 8 profiles in 02-data.sql
+      phones      <- targetDb.run(sql"SELECT phones FROM profiles WHERE user_id = 1".as[String].head)
+      _           <- assert(phones.contains("XXX-XXXX"))
+      _           <- assert(!phones.contains("555-0101"))
+      _           <- assert(!phones.contains("555-0102"))
     } yield succeed
   }
 
@@ -273,36 +271,36 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
     for {
       // First copy users (needed for FK constraint)
       userColumns <- sourceDb.run(getTableColumns("users"))
-      _ <- copyTable(sourceDb, targetDb, "users", userColumns)
+      _           <- copyTable(sourceDb, targetDb, "users", userColumns)
       // Now copy profiles with transformation
-      columns <- sourceDb.run(getTableColumns("profiles"))
-      count <- copyTable(
-        sourceDb = sourceDb,
-        targetDb = targetDb,
-        tableName = "profiles",
-        columns = columns,
-        transformer = Some(transformer)
-      )
-      _ <- assert(count === 8)
-      phones <- targetDb.run(sql"SELECT phones FROM profiles WHERE user_id = 1".as[String].head)
-      _ <- assert(!phones.contains("555-0101"))
-      _ <- assert(!phones.contains("555-0102"))
-      _ <- assert(phones.contains("(")) // Should have phone format (XXX) XXX-XXXX
+      columns     <- sourceDb.run(getTableColumns("profiles"))
+      count       <- copyTable(
+                       sourceDb = sourceDb,
+                       targetDb = targetDb,
+                       tableName = "profiles",
+                       columns = columns,
+                       transformer = Some(transformer)
+                     )
+      _           <- assert(count === 8)
+      phones      <- targetDb.run(sql"SELECT phones FROM profiles WHERE user_id = 1".as[String].head)
+      _           <- assert(!phones.contains("555-0101"))
+      _           <- assert(!phones.contains("555-0102"))
+      _           <- assert(phones.contains("(")) // Should have phone format (XXX) XXX-XXXX
     } yield succeed
   }
 
   test("copyTable copies hierarchical categories") { targetDb =>
     for {
-      columns <- sourceDb.run(getTableColumns("categories"))
-      count <- copyTable(
-        sourceDb = sourceDb,
-        targetDb = targetDb,
-        tableName = "categories",
-        columns = columns
-      )
-      _ <- assert(count === 10) // 3 root + 7 children in 02-data.sql
+      columns    <- sourceDb.run(getTableColumns("categories"))
+      count      <- copyTable(
+                      sourceDb = sourceDb,
+                      targetDb = targetDb,
+                      tableName = "categories",
+                      columns = columns
+                    )
+      _          <- assert(count === 10)     // 3 root + 7 children in 02-data.sql
       childCount <- targetDb.run(sql"SELECT COUNT(*) FROM categories WHERE parent_id IS NOT NULL".as[Int].head)
-      _ <- assert(childCount === 7) // 7 child categories
+      _          <- assert(childCount === 7) // 7 child categories
     } yield succeed
   }
 
@@ -310,16 +308,16 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
     for {
       // First copy users (needed for FK)
       userColumns <- sourceDb.run(getTableColumns("users"))
-      _ <- copyTable(sourceDb, targetDb, "users", userColumns)
+      _           <- copyTable(sourceDb, targetDb, "users", userColumns)
       // Now copy orders
-      columns <- sourceDb.run(getTableColumns("orders"))
-      count <- copyTable(sourceDb, targetDb, "orders", columns)
-      _ <- assert(count === 12) // 12 orders in 02-data.sql
-      joinCount <- targetDb.run(
-        sql"""SELECT COUNT(*) FROM orders o
+      columns     <- sourceDb.run(getTableColumns("orders"))
+      count       <- copyTable(sourceDb, targetDb, "orders", columns)
+      _           <- assert(count === 12)     // 12 orders in 02-data.sql
+      joinCount   <- targetDb.run(
+                       sql"""SELECT COUNT(*) FROM orders o
               JOIN users u ON o.user_id = u.id""".as[Int].head
-      )
-      _ <- assert(joinCount === 12) // All orders should join with users
+                     )
+      _           <- assert(joinCount === 12) // All orders should join with users
     } yield succeed
   }
 
@@ -329,9 +327,9 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
 
   test("copyTable handles table with special characters in name") { targetDb =>
     // Create a table with a malicious name in both source and target
-    val maliciousTableName = "users; DROP TABLE orders; --"
+    val maliciousTableName  = "users; DROP TABLE orders; --"
     val maliciousColumnName = "data; DELETE FROM users; --"
-    val createTableSql =
+    val createTableSql      =
       sqlu"""CREATE TABLE IF NOT EXISTS "#$maliciousTableName" (
         id SERIAL PRIMARY KEY,
         "#$maliciousColumnName" VARCHAR(100)
@@ -341,26 +339,26 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
       // Create the malicious table in source and target
       _ <- sourceDb.run(createTableSql)
       _ <- sourceDb.run(
-        sqlu"""INSERT INTO "#$maliciousTableName" ("#$maliciousColumnName") VALUES ('test data 1'), ('test data 2')"""
-      )
+             sqlu"""INSERT INTO "#$maliciousTableName" ("#$maliciousColumnName") VALUES ('test data 1'), ('test data 2')"""
+           )
       _ <- targetDb.run(createTableSql)
 
       // Verify orders table exists before the copy
       orderCountBefore <- sourceDb.run(sql"SELECT COUNT(*) FROM orders".as[Int].head)
-      _ <- assert(orderCountBefore === 12, "Orders should exist before copy")
+      _                <- assert(orderCountBefore === 12, "Orders should exist before copy")
 
       // Copy the malicious table - quoteIdentifier should make this safe
       columns <- sourceDb.run(getTableColumns(maliciousTableName))
-      count <- copyTable(sourceDb, targetDb, maliciousTableName, columns)
-      _ <- assert(count === 2, "Should copy 2 rows from malicious table")
+      count   <- copyTable(sourceDb, targetDb, maliciousTableName, columns)
+      _       <- assert(count === 2, "Should copy 2 rows from malicious table")
 
       // CRITICAL: Verify orders table still exists (wasn't dropped by injection)
       orderCountAfter <- sourceDb.run(sql"SELECT COUNT(*) FROM orders".as[Int].head)
-      _ <- assert(orderCountAfter === 12, "Orders table should not be affected by copying malicious-named table")
+      _               <- assert(orderCountAfter === 12, "Orders table should not be affected by copying malicious-named table")
 
       // Verify the data was actually copied correctly
       targetCount <- targetDb.run(sql"""SELECT COUNT(*) FROM "#$maliciousTableName"""".as[Int].head)
-      _ <- assert(targetCount === 2, "Target should have 2 rows")
+      _           <- assert(targetCount === 2, "Target should have 2 rows")
     } yield succeed
   }
 }

@@ -66,8 +66,8 @@ object DbSnapshot {
   )(implicit ec: ExecutionContext): DBIO[Either[Set[String], Unit]] =
     for {
       allColumns <- getTableColumns(tableName, schema)
-      pkColumns <- getPrimaryKeyColumns(tableName, schema)
-      fkColumns <- getForeignKeyColumns(tableName, schema)
+      pkColumns  <- getPrimaryKeyColumns(tableName, schema)
+      fkColumns  <- getForeignKeyColumns(tableName, schema)
     } yield {
       val requiredColumns = allColumns.toSet -- pkColumns -- fkColumns
       transformer.validateCovers(requiredColumns)
@@ -127,7 +127,7 @@ object DbSnapshot {
       tableName: String,
       columns: Seq[String],
       schema: String = "public"
-  )(implicit ec: ExecutionContext): DBIO[Seq[String]] = {
+  )(implicit ec: ExecutionContext): DBIO[Seq[String]] =
     sql"""
       SELECT column_name, data_type
       FROM information_schema.columns
@@ -136,7 +136,6 @@ object DbSnapshot {
       val typeMap = colTypes.toMap
       columns.map(c => typeMap.getOrElse(c, "unknown"))
     }
-  }
 
   // Internal row representation that keeps both raw objects and string values
   private case class RawRow(objects: Map[String, AnyRef], strings: Map[String, String])
@@ -150,8 +149,8 @@ object DbSnapshot {
       limit: Option[Int] = None,
       transformer: Option[RowTransformer.TableTransformer] = None
   )(implicit ec: ExecutionContext): Future[Int] = {
-    val quotedTable = quoteIdentifier(tableName)
-    val columnList = columns.map(quoteIdentifier).mkString(", ")
+    val quotedTable  = quoteIdentifier(tableName)
+    val columnList   = columns.map(quoteIdentifier).mkString(", ")
     val placeholders = columns.map(_ => "?").mkString(", ")
 
     // Add ORDER BY id DESC when using LIMIT for deterministic results (if the table has id column)
@@ -195,7 +194,7 @@ object DbSnapshot {
         } else {
           // Transform and insert in batches
           val batchSize = 1000
-          val batches = rows.grouped(batchSize).toList
+          val batches   = rows.grouped(batchSize).toList
 
           // Get set of columns that will be transformed
           val transformedColumns = transformer.map(_.columnNames).getOrElse(Set.empty)
@@ -207,8 +206,8 @@ object DbSnapshot {
               case batch :: rest =>
                 // Use SimpleDBIO for batch inserts with PreparedStatement
                 val batchInsertAction = SimpleDBIO[Int] { ctx =>
-                  val conn = ctx.connection
-                  val stmt = conn.prepareStatement(insertSql)
+                  val conn       = ctx.connection
+                  val stmt       = conn.prepareStatement(insertSql)
                   var batchCount = 0
 
                   for (rawRow <- batch) {
@@ -216,7 +215,7 @@ object DbSnapshot {
                     val transformedStrings = transformer.fold(rawRow.strings)(_.transform(rawRow.strings))
 
                     for (idx <- columns.indices) {
-                      val column = columns(idx)
+                      val column     = columns(idx)
                       val columnType = columnTypes(idx)
 
                       val value: AnyRef =

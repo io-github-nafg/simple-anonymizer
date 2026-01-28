@@ -18,12 +18,12 @@ object DependencyGraph {
       val deps = mutable.Map[String, mutable.Set[String]]()
       for (table <- tables)
         deps(table) = mutable.Set.empty
-      for (fk <- fks if fk.fkTable.name != fk.pkTable.name) // Ignore self-references
+      for (fk    <- fks if fk.fkTable.name != fk.pkTable.name) // Ignore self-references
         deps.get(fk.fkTable.name).foreach(_ += fk.pkTable.name)
       deps.view.mapValues(_.toSet).toMap
     }
 
-    val levels = mutable.Map[String, Int]()
+    val levels  = mutable.Map[String, Int]()
     var changed = true
 
     // Initialize: tables with no dependencies are level 0

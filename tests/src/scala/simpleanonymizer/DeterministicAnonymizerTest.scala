@@ -76,7 +76,7 @@ class DeterministicAnonymizerTest extends AnyFunSuite with TypeCheckedTripleEqua
   }
 
   test("FirstName is deterministic") {
-    val input = "John"
+    val input   = "John"
     val result1 = FirstName.anonymize(input)
     val result2 = FirstName.anonymize(input)
     assert(result1 === result2)
@@ -86,7 +86,7 @@ class DeterministicAnonymizerTest extends AnyFunSuite with TypeCheckedTripleEqua
   test("FullName produces first + space + last format") {
     val result = FullName.anonymize("John Doe")
     assert(result.contains(" "), s"Expected space in '$result'")
-    val parts = result.split(" ")
+    val parts  = result.split(" ")
     assert(parts.length === 2)
     assert(parts(0).nonEmpty)
     assert(parts(1).nonEmpty)
@@ -96,7 +96,7 @@ class DeterministicAnonymizerTest extends AnyFunSuite with TypeCheckedTripleEqua
     // The same input should produce different first/last names
     // because the implementation uses different salt for each
     val result = FullName.anonymize("TestName")
-    val parts = result.split(" ")
+    val parts  = result.split(" ")
     // We can't guarantee they're different (hash collision possible)
     // but we can verify they're both real names
     assert(parts(0).nonEmpty)
@@ -111,20 +111,20 @@ class DeterministicAnonymizerTest extends AnyFunSuite with TypeCheckedTripleEqua
     val result = Email.anonymize("test@example.com")
     assert(result.contains("@"), s"Expected @ in '$result'")
     assert(result.contains("."), s"Expected . in '$result'")
-    val parts = result.split("@")
+    val parts  = result.split("@")
     assert(parts.length === 2)
     assert(parts(0).contains("."), s"Expected . in local part '${parts(0)}'")
   }
 
   test("Email uses predefined safe domains") {
     val allowedDomains = Set("example.com", "test.com", "fake.org", "sample.net")
-    val result = Email.anonymize("test@company.com")
-    val domain = result.split("@")(1)
+    val result         = Email.anonymize("test@company.com")
+    val domain         = result.split("@")(1)
     assert(allowedDomains.contains(domain), s"Unexpected domain: $domain")
   }
 
   test("PhoneNumber produces (XXX) XXX-XXXX format") {
-    val result = PhoneNumber.anonymize("555-123-4567")
+    val result  = PhoneNumber.anonymize("555-123-4567")
     val pattern = """\(\d{3}\) \d{3}-\d{4}""".r
     assert(pattern.matches(result), s"Unexpected format: $result")
   }
@@ -135,7 +135,7 @@ class DeterministicAnonymizerTest extends AnyFunSuite with TypeCheckedTripleEqua
 
   test("StreetAddress produces number + street + suffix format") {
     val result = StreetAddress.anonymize("123 Main St")
-    val parts = result.split(" ")
+    val parts  = result.split(" ")
     assert(parts.length >= 3, s"Expected at least 3 parts in '$result'")
     // First part should be a number
     assert(parts(0).forall(_.isDigit), s"Expected first part to be number: ${parts(0)}")
@@ -145,7 +145,7 @@ class DeterministicAnonymizerTest extends AnyFunSuite with TypeCheckedTripleEqua
     val result = ZipCode.anonymize("12345")
     assert(result.length === 5, s"Expected 5 chars, got ${result.length}")
     assert(result.forall(_.isDigit), s"Expected all digits in '$result'")
-    val num = result.toInt
+    val num    = result.toInt
     assert(num >= 10000 && num <= 99999)
   }
 
@@ -187,7 +187,7 @@ class DeterministicAnonymizerTest extends AnyFunSuite with TypeCheckedTripleEqua
   }
 
   test("LoremText is deterministic") {
-    val input = "test input"
+    val input   = "test input"
     val result1 = LoremText.anonymize(input)
     val result2 = LoremText.anonymize(input)
     assert(result1 === result2)

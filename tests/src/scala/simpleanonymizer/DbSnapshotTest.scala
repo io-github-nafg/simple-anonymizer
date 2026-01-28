@@ -29,7 +29,7 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
 
   test("computeTableLevels assigns level 0 to tables with no FK dependencies") {
     val tables = Seq("users", "products", "categories")
-    val fks = Seq.empty[MForeignKey]
+    val fks    = Seq.empty[MForeignKey]
     val levels = computeTableLevels(tables, fks)
     assert(levels === Map("users" -> 0, "products" -> 0, "categories" -> 0))
   }
@@ -37,7 +37,7 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
   test("computeTableLevels assigns higher levels based on dependencies") {
     // orders depends on users (FK: orders.user_id -> users.id)
     val tables = Seq("users", "orders")
-    val fks = Seq(fk("orders", "user_id", "users", "id"))
+    val fks    = Seq(fk("orders", "user_id", "users", "id"))
     val levels = computeTableLevels(tables, fks)
     assert(levels("users") === 0)
     assert(levels("orders") === 1)
@@ -47,7 +47,7 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
     // Diamond: A <- B, A <- C, B <- D, C <- D
     // users <- orders, users <- products, orders <- order_items, products <- order_items
     val tables = Seq("users", "orders", "products", "order_items")
-    val fks = Seq(
+    val fks    = Seq(
       fk("orders", "user_id", "users", "id"),
       fk("products", "user_id", "users", "id"),
       fk("order_items", "order_id", "orders", "id"),
@@ -63,7 +63,7 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
   test("computeTableLevels ignores self-referencing FKs") {
     // categories with parent_id -> categories.id (self-reference)
     val tables = Seq("categories")
-    val fks = Seq(fk("categories", "parent_id", "categories", "id"))
+    val fks    = Seq(fk("categories", "parent_id", "categories", "id"))
     val levels = computeTableLevels(tables, fks)
     assert(levels("categories") === 0)
   }
@@ -71,7 +71,7 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
   test("computeTableLevels handles circular dependencies gracefully") {
     // A -> B -> A (circular)
     val tables = Seq("a", "b")
-    val fks = Seq(
+    val fks    = Seq(
       fk("a", "b_id", "b", "id"),
       fk("b", "a_id", "a", "id")
     )
@@ -106,31 +106,31 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
   // ============================================================================
 
   test("generateChildWhereClause returns None when no parent has filter") {
-    val fks = Seq(fk("orders", "user_id", "users", "id"))
+    val fks           = Seq(fk("orders", "user_id", "users", "id"))
     val parentFilters = Map.empty[String, String]
-    val result = generateChildWhereClause("orders", parentFilters, fks)
+    val result        = generateChildWhereClause("orders", parentFilters, fks)
     assert(result === None)
   }
 
   test("generateChildWhereClause generates subquery for single FK") {
-    val fks = Seq(fk("orders", "user_id", "users", "id"))
+    val fks           = Seq(fk("orders", "user_id", "users", "id"))
     val parentFilters = Map("users" -> "created_at > '2024-01-01'")
-    val result = generateChildWhereClause("orders", parentFilters, fks)
+    val result        = generateChildWhereClause("orders", parentFilters, fks)
     assert(result === Some("user_id IN (SELECT id FROM users WHERE created_at > '2024-01-01')"))
   }
 
   test("generateChildWhereClause combines multiple FKs with AND") {
-    val fks = Seq(
+    val fks           = Seq(
       fk("order_items", "order_id", "orders", "id"),
       fk("order_items", "product_id", "products", "id")
     )
     val parentFilters = Map(
-      "orders" -> "status = 'active'",
+      "orders"   -> "status = 'active'",
       "products" -> "available = true"
     )
-    val result = generateChildWhereClause("order_items", parentFilters, fks)
+    val result        = generateChildWhereClause("order_items", parentFilters, fks)
     assert(result.isDefined)
-    val clause = result.get
+    val clause        = result.get
     assert(clause.contains("order_id IN (SELECT id FROM orders WHERE status = 'active')"))
     assert(clause.contains("product_id IN (SELECT id FROM products WHERE available = true)"))
     assert(clause.contains(" AND "))
@@ -141,19 +141,19 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
   // ============================================================================
 
   test("computeEffectiveFilters uses explicit whereClause") {
-    val tables = Seq("users")
-    val fks = Seq.empty[MForeignKey]
+    val tables  = Seq("users")
+    val fks     = Seq.empty[MForeignKey]
     val configs = Map("users" -> TableConfig(whereClause = Some("active = true")))
     val filters = computeEffectiveFilters(tables, fks, configs)
     assert(filters("users") === Some("active = true"))
   }
 
   test("computeEffectiveFilters returns None for skip and copyAll") {
-    val tables = Seq("audit_log", "config")
-    val fks = Seq.empty[MForeignKey]
+    val tables  = Seq("audit_log", "config")
+    val fks     = Seq.empty[MForeignKey]
     val configs = Map(
       "audit_log" -> TableConfig(skip = true),
-      "config" -> TableConfig(copyAll = true)
+      "config"    -> TableConfig(copyAll = true)
     )
     val filters = computeEffectiveFilters(tables, fks, configs)
     assert(filters("audit_log") === None)
@@ -161,8 +161,8 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
   }
 
   test("computeEffectiveFilters propagates filters through FK chain") {
-    val tables = Seq("users", "orders", "order_items")
-    val fks = Seq(
+    val tables  = Seq("users", "orders", "order_items")
+    val fks     = Seq(
       fk("orders", "user_id", "users", "id"),
       fk("order_items", "order_id", "orders", "id")
     )

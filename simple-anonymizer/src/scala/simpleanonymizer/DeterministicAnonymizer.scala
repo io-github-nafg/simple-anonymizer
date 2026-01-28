@@ -14,8 +14,8 @@ import net.datafaker.service.FakerContext
   */
 object DeterministicAnonymizer {
 
-  private val locale = Locale.US
-  private val faker = new Faker(locale)
+  private val locale  = Locale.US
+  private val faker   = new Faker(locale)
   private val context = new FakerContext(locale, faker.random())
   private val service = faker.fakeValuesService()
 
@@ -23,10 +23,10 @@ object DeterministicAnonymizer {
     */
   private[simpleanonymizer] def stableHash(input: String): Int = {
     if (input == null || input.isEmpty) return 0
-    val md = MessageDigest.getInstance("MD5")
+    val md    = MessageDigest.getInstance("MD5")
     val bytes = md.digest(input.getBytes("UTF-8"))
     // Use the first 4 bytes as an int, make positive
-    val hash = ((bytes(0) & 0xff) << 24) |
+    val hash  = ((bytes(0) & 0xff) << 24) |
       ((bytes(1) & 0xff) << 16) |
       ((bytes(2) & 0xff) << 8) |
       (bytes(3) & 0xff)
@@ -35,7 +35,7 @@ object DeterministicAnonymizer {
 
   /** Select an element from a list deterministically based on the hash of input. */
   private def selectByHash[A](input: String, list: java.util.List[A]): A = {
-    val size = list.size()
+    val size  = list.size()
     val index = stableHash(input) % size
     list.get(index)
   }
@@ -46,21 +46,21 @@ object DeterministicAnonymizer {
 
   // Pre-fetch commonly used data lists for performance
   // Note: name.first_name contains template expressions, we need the actual name lists
-  private lazy val maleFirstNames = getDataList("name.male_first_name")
+  private lazy val maleFirstNames   = getDataList("name.male_first_name")
   private lazy val femaleFirstNames = getDataList("name.female_first_name")
   // Combine male and female names for a gender-neutral first name list
-  private lazy val firstNames = {
+  private lazy val firstNames       = {
     val combined = new java.util.ArrayList[String](maleFirstNames.size() + femaleFirstNames.size())
     combined.addAll(maleFirstNames)
     combined.addAll(femaleFirstNames)
     combined
   }
-  private lazy val lastNames = getDataList("name.last_name")
-  private lazy val streetSuffixes = getDataList("address.street_suffix")
-  private lazy val citySuffixes = getDataList("address.city_suffix")
-  private lazy val states = getDataList("address.state")
-  private lazy val stateAbbrs = getDataList("address.state_abbr")
-  private lazy val countries = getDataList("address.country")
+  private lazy val lastNames        = getDataList("name.last_name")
+  private lazy val streetSuffixes   = getDataList("address.street_suffix")
+  private lazy val citySuffixes     = getDataList("address.city_suffix")
+  private lazy val states           = getDataList("address.state")
+  private lazy val stateAbbrs       = getDataList("address.state_abbr")
+  private lazy val countries        = getDataList("address.country")
 
   /** Sealed trait for different anonymization strategies */
   sealed trait Anonymizer {
@@ -116,7 +116,7 @@ object DeterministicAnonymizer {
       preserveNullOrEmpty(input) { in =>
         val first = selectByHash(in, firstNames)
         // Use a different hash for last name to avoid correlation
-        val last = selectByHash(in + "_last", lastNames)
+        val last  = selectByHash(in + "_last", lastNames)
         s"$first $last"
       }
   }
@@ -127,8 +127,8 @@ object DeterministicAnonymizer {
 
     def anonymize(input: String): String =
       preserveNullOrEmpty(input) { in =>
-        val first = selectByHash(in, firstNames).toLowerCase
-        val last = selectByHash(in + "_last", lastNames).toLowerCase
+        val first  = selectByHash(in, firstNames).toLowerCase
+        val last   = selectByHash(in + "_last", lastNames).toLowerCase
         val domain = domains(stableHash(in + "_domain") % domains.size)
         s"$first.$last@$domain"
       }
@@ -138,7 +138,7 @@ object DeterministicAnonymizer {
   case object PhoneNumber extends Anonymizer {
     def anonymize(input: String): String =
       preserveNullOrEmpty(input) { in =>
-        val hash = stableHash(in)
+        val hash   = stableHash(in)
         // Generate a consistent 10-digit number
         val digits = (0 until 10).map(i => ((hash >> (i % 30)) & 0xf) % 10)
         // Format as (XXX) XXX-XXXX
@@ -150,7 +150,7 @@ object DeterministicAnonymizer {
   case object StreetAddress extends Anonymizer {
     def anonymize(input: String): String =
       preserveNullOrEmpty(input) { in =>
-        val hash = stableHash(in)
+        val hash   = stableHash(in)
         val number = (hash % 9999) + 1
         val street = selectByHash(in + "_street", lastNames)
         val suffix = selectByHash(in + "_suffix", streetSuffixes)
@@ -162,7 +162,7 @@ object DeterministicAnonymizer {
   case object City extends Anonymizer {
     def anonymize(input: String): String =
       preserveNullOrEmpty(input) { in =>
-        val name = selectByHash(in, lastNames)
+        val name   = selectByHash(in, lastNames)
         val suffix = selectByHash(in + "_suffix", citySuffixes)
         s"$name$suffix"
       }
@@ -208,8 +208,8 @@ object DeterministicAnonymizer {
       preserveNullOrEmpty(input) { in =>
         if (in.length <= showFirst + showLast) "*" * in.length
         else {
-          val first = in.take(showFirst)
-          val last = in.takeRight(showLast)
+          val first  = in.take(showFirst)
+          val last   = in.takeRight(showLast)
           val middle = "*" * (in.length - showFirst - showLast)
           s"$first$middle$last"
         }
@@ -243,9 +243,9 @@ object DeterministicAnonymizer {
     def anonymize(input: String): String =
       preserveNullOrEmpty(input) { in =>
         val targetLength = in.length
-        val hash = stableHash(in)
-        val result = new StringBuilder()
-        var wordIndex = hash
+        val hash         = stableHash(in)
+        val result       = new StringBuilder()
+        var wordIndex    = hash
 
         while (result.length < targetLength) {
           if (result.nonEmpty) result.append(" ")
