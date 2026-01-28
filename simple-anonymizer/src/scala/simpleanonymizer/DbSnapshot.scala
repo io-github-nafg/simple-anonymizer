@@ -1,15 +1,46 @@
 package simpleanonymizer
 
-import scala.concurrent.{ExecutionContext, Future}
-
 import org.postgresql.util.PGobject
 import slick.jdbc.GetResult
 import slick.jdbc.meta.{MForeignKey, MTable}
+
+import scala.concurrent.{ExecutionContext, Future}
 
 /** Database snapshot and data operations for PostgreSQL using Slick. */
 object DbSnapshot {
   import SlickProfile.api._
   import SlickProfile.quoteIdentifier
+
+  // ============================================================================
+  // Code snippet generation for error messages
+  // ============================================================================
+
+  /** Generate a code snippet for a table transformer with passthrough for all columns.
+    *
+    * Used in error messages to help developers quickly add missing tables.
+    */
+  def generateTableSnippet(tableName: String, columns: Seq[String]): String = {
+    val columnBindings = columns.map(col => s""""$col" -> passthrough""").mkString(",\n    ")
+    s""""$tableName" -> table(\n    $columnBindings\n  )"""
+  }
+
+  /** Generate code snippets for missing column bindings.
+    *
+    * Used in error messages to help developers quickly add missing columns.
+    */
+  def generateColumnSnippets(columns: Set[String]): String =
+    columns.toSeq.sorted.map(col => s""""$col" -> passthrough""").mkString(",\n    ")
+
+  /** List columns that need transformers (non-PK, non-FK columns).
+    *
+    * Useful for identifying which columns in a table contain actual data that may need anonymization.
+    */
+  def getDataColumns(tableName: String, schema: String = "public")(implicit ec: ExecutionContext): DBIO[Seq[String]] =
+    for {
+      columns   <- getTableColumns(tableName, schema)
+      pkColumns <- getPrimaryKeyColumns(tableName, schema)
+      fkColumns <- getForeignKeyColumns(tableName, schema)
+    } yield columns.filterNot(c => pkColumns.contains(c) || fkColumns.contains(c))
 
   // ============================================================================
   // Metadata queries

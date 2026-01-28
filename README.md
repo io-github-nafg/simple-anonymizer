@@ -92,6 +92,62 @@ for {
 } yield count
 ```
 
+### High-Level Snapshot API
+
+For copying entire databases with automatic FK ordering and filter propagation.
+Requires explicit transformer definitions for all tables - the system enforces that every column is consciously handled.
+
+```scala
+import simpleanonymizer.{Snapshot, DbSnapshot}
+import simpleanonymizer.DbSnapshot.TableConfig
+import simpleanonymizer.RowTransformer.DSL.*
+import simpleanonymizer.DeterministicAnonymizer.*
+
+val snapshot = new Snapshot(sourceDb, targetDb)
+
+// Tables to skip entirely (no transformer required)
+val excludedTables = Set("audit_logs", "temp_data")
+
+// Optional: filter rows for specific tables
+val tableConfigs = Map(
+  "users" -> TableConfig(whereClause = Some("active = true"))
+)
+
+// REQUIRED: Define transformers for ALL non-excluded tables
+val transformers = Map(
+  "users" -> table(
+    "first_name" -> using(FirstName.anonymize),
+    "last_name"  -> using(LastName.anonymize),
+    "email"      -> using(Email.anonymize)
+  ),
+  "orders" -> table(
+    "description" -> passthrough,
+    "amount"      -> passthrough
+  )
+)
+
+// Copy all tables in FK order
+for {
+  result <- snapshot.copy(excludedTables, tableConfigs, transformers)
+} yield result  // Map[tableName -> rowCount]
+```
+
+If you miss a table or column, the error message includes copy-pastable code snippets:
+
+```
+Missing transformers for 2 table(s).
+
+Add these tables to 'transformers':
+
+"products" -> table(
+    "name" -> passthrough,
+    "description" -> passthrough
+  ),
+
+Or add them to 'excludedTables' to skip:
+excludedTables = Set("products", "categories")
+```
+
 ### Copy Options
 
 ```scala
@@ -328,11 +384,17 @@ simpleanonymizer/
 ├── DbSnapshot.scala               — Database operations (Slick-based)
 │   ├── getAllTables               — List tables in schema
 │   ├── getTableColumns            — List columns in table
+│   ├── getDataColumns             — List non-PK/FK columns
 │   ├── getPrimaryKeyColumns       — Get PK columns
 │   ├── getForeignKeyColumns       — Get FK columns
 │   ├── getForeignKeys             — Get all FK relationships
 │   ├── validateTransformerCoverage— Validate column coverage
+│   ├── generateTableSnippet       — Code snippet for error messages
 │   └── copyTable                  — Copy with optional transformation
+│
+├── Snapshot (class)               — High-level orchestrator
+│   └── copy                       — Copy all tables with FK ordering
+│                                    (enforces transformer coverage)
 │
 ├── DependencyGraph.scala          — FK dependency analysis
 │   ├── computeTableLevels         — Topological sort by FK depth
