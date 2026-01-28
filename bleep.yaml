@@ -25,6 +25,8 @@ projects:
     dependsOn: simple-anonymizer
     extends: template-cross-all
     isTestProject: true
+    resources:
+    - ./resources
 templates:
   template-common:
     platform:

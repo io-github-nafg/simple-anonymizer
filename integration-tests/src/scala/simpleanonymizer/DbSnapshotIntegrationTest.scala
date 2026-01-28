@@ -71,55 +71,11 @@ class DbSnapshotIntegrationTest extends AnyFunSuite with BeforeAndAfterAll with 
   }
 
   private def setupTestSchema(conn: Connection): Unit = {
+    val schemaUrl = getClass.getClassLoader.getResource("schema.sql")
+    require(schemaUrl != null, "schema.sql not found in resources")
+    val schemaSql = scala.io.Source.fromURL(schemaUrl).mkString
     val stmt = conn.createStatement()
-
-    // Create test tables with FK relationships
-    stmt.execute("""
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        first_name VARCHAR(100),
-        last_name VARCHAR(100),
-        email VARCHAR(200)
-      )
-    """)
-
-    stmt.execute("""
-      CREATE TABLE IF NOT EXISTS orders (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id),
-        total DECIMAL(10,2),
-        status VARCHAR(50)
-      )
-    """)
-
-    stmt.execute("""
-      CREATE TABLE IF NOT EXISTS order_items (
-        id SERIAL PRIMARY KEY,
-        order_id INTEGER REFERENCES orders(id),
-        product_name VARCHAR(200),
-        quantity INTEGER
-      )
-    """)
-
-    // Table with self-reference
-    stmt.execute("""
-      CREATE TABLE IF NOT EXISTS categories (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(100),
-        parent_id INTEGER REFERENCES categories(id)
-      )
-    """)
-
-    // Table with JSONB column
-    stmt.execute("""
-      CREATE TABLE IF NOT EXISTS profiles (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id),
-        phones JSONB,
-        settings JSONB
-      )
-    """)
-
+    stmt.execute(schemaSql)
     conn.commit()
     stmt.close()
   }
