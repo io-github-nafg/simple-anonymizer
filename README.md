@@ -60,16 +60,17 @@ val anonymized = personTransformer.transform(row)
 
 ## Database Copying
 
-Copy tables between PostgreSQL databases with optional anonymization:
+Copy tables between PostgreSQL databases with optional anonymization. Uses Slick for async database operations:
 
 ```scala
 import simpleanonymizer.DbSnapshot.*
+import simpleanonymizer.SlickProfile.api.*
 import simpleanonymizer.DeterministicAnonymizer.*
 import simpleanonymizer.RowTransformer.DSL.*
-import java.sql.DriverManager
+import scala.concurrent.ExecutionContext.Implicits.global
 
-val sourceConn = DriverManager.getConnection(sourceUrl, user, pass)
-val targetConn = DriverManager.getConnection(targetUrl, user, pass)
+val sourceDb = Database.forURL(sourceUrl, user, pass)
+val targetDb = Database.forURL(targetUrl, user, pass)
 
 // Define transformer for sensitive columns
 val userTransformer = table(
@@ -79,22 +80,24 @@ val userTransformer = table(
 )
 
 // Copy with transformation
-val columns = getTableColumns(sourceConn, "users")
-copyTable(
-  sourceConn = sourceConn,
-  targetConn = targetConn,
-  tableName = "users",
-  columns = columns,
-  transformer = Some(userTransformer)
-)
+for {
+  columns <- sourceDb.run(getTableColumns("users"))
+  count   <- copyTable(
+               sourceDb = sourceDb,
+               targetDb = targetDb,
+               tableName = "users",
+               columns = columns,
+               transformer = Some(userTransformer)
+             )
+} yield count
 ```
 
 ### Copy Options
 
 ```scala
 copyTable(
-  sourceConn = sourceConn,
-  targetConn = targetConn,
+  sourceDb = sourceDb,
+  targetDb = targetDb,
   tableName = "users",
   columns = columns,
   whereClause = Some("created_at > '2024-01-01'"),  // Filter rows
@@ -108,16 +111,23 @@ copyTable(
 Copy tables in the correct order based on foreign key dependencies:
 
 ```scala
-val tables = getAllTables(sourceConn)
-val fks = getForeignKeys(sourceConn)
-val tableLevels = computeTableLevels(tables, fks)
-val orderedGroups = groupTablesByLevel(tableLevels)
-
-// Copy in order: level 0 (no dependencies), then level 1, etc.
-for (group <- orderedGroups; table <- group) {
-  val cols = getTableColumns(sourceConn, table)
-  copyTable(sourceConn, targetConn, table, cols)
-}
+for {
+  tables        <- sourceDb.run(getAllTables())
+  fks           <- sourceDb.run(getForeignKeys())
+  tableLevels    = computeTableLevels(tables, fks)
+  orderedGroups  = groupTablesByLevel(tableLevels)
+  // Copy in order: level 0 (no dependencies), then level 1, etc.
+  _ <- orderedGroups.foldLeft(Future.successful(())) { (prev, group) =>
+    prev.flatMap { _ =>
+      Future.traverse(group) { table =>
+        for {
+          cols  <- sourceDb.run(getTableColumns(table))
+          count <- copyTable(sourceDb, targetDb, table, cols)
+        } yield count
+      }
+    }
+  }
+} yield ()
 ```
 
 ### Filter Propagation
@@ -125,13 +135,17 @@ for (group <- orderedGroups; table <- group) {
 Automatically propagate WHERE clauses through FK relationships:
 
 ```scala
-val tableConfigs = Map(
-  "users" -> TableConfig(whereClause = Some("active = true"))
-)
-
-val effectiveFilters = computeEffectiveFilters(tables, fks, tableConfigs)
-// Child tables (orders, profiles) automatically get:
-// "user_id IN (SELECT id FROM users WHERE active = true)"
+for {
+  tables <- sourceDb.run(getAllTables())
+  fks    <- sourceDb.run(getForeignKeys())
+} yield {
+  val tableConfigs = Map(
+    "users" -> TableConfig(whereClause = Some("active = true"))
+  )
+  val effectiveFilters = computeEffectiveFilters(tables, fks, tableConfigs)
+  // Child tables (orders, profiles) automatically get:
+  // "user_id IN (SELECT id FROM users WHERE active = true)"
+}
 ```
 
 ## DSL Reference
@@ -287,7 +301,9 @@ transformer.validateCovers(expectedColumns) match {
 Database-level validation:
 
 ```scala
-validateTransformerCoverage(conn, "users", transformer) match {
+for {
+  result <- sourceDb.run(validateTransformerCoverage("users", transformer))
+} yield result match {
   case Left(missing) => println(s"Missing non-PK/FK columns: $missing")
   case Right(())     => println("All data columns covered")
 }
@@ -309,15 +325,14 @@ simpleanonymizer/
 │   ├── TableTransformer           — Composes column specs
 │   └── DSL                        — User-facing API
 │
-├── DbSnapshot.scala               — Database copying operations
-│   └── copyTable                  — Copy with optional transformation
-│
-├── DbMetadata.scala               — Schema introspection
+├── DbSnapshot.scala               — Database operations (Slick-based)
 │   ├── getAllTables               — List tables in schema
 │   ├── getTableColumns            — List columns in table
 │   ├── getPrimaryKeyColumns       — Get PK columns
 │   ├── getForeignKeyColumns       — Get FK columns
-│   └── getForeignKeys             — Get all FK relationships
+│   ├── getForeignKeys             — Get all FK relationships
+│   ├── validateTransformerCoverage— Validate column coverage
+│   └── copyTable                  — Copy with optional transformation
 │
 ├── DependencyGraph.scala          — FK dependency analysis
 │   ├── computeTableLevels         — Topological sort by FK depth
