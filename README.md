@@ -1,6 +1,6 @@
 # simple-anonymizer
 
-A Scala library for deterministic data anonymization with a composable DSL.
+A Scala library for deterministic data anonymization with a composable DSL, plus database copying with transformations.
 
 ## Features
 
@@ -9,6 +9,8 @@ A Scala library for deterministic data anonymization with a composable DSL.
 - **Composable DSL** — Build table transformers by combining column specifications
 - **JSON support** — Transform fields within JSON arrays and objects
 - **Dependent columns** — Columns that depend on other columns' values
+- **Database copying** — Copy tables between PostgreSQL databases with optional transformations
+- **FK-aware ordering** — Automatically determine correct table copy order based on foreign keys
 
 ## Installation
 
@@ -54,6 +56,82 @@ val anonymized = personTransformer.transform(row)
 //   "email"      -> "sarah.wilson@example.com",
 //   "created_at" -> "2024-01-15"
 // )
+```
+
+## Database Copying
+
+Copy tables between PostgreSQL databases with optional anonymization:
+
+```scala
+import simpleanonymizer.DbSnapshot.*
+import simpleanonymizer.DeterministicAnonymizer.*
+import simpleanonymizer.RowTransformer.DSL.*
+import java.sql.DriverManager
+
+val sourceConn = DriverManager.getConnection(sourceUrl, user, pass)
+val targetConn = DriverManager.getConnection(targetUrl, user, pass)
+
+// Define transformer for sensitive columns
+val userTransformer = table(
+  "first_name" -> using(FirstName.anonymize),
+  "last_name"  -> using(LastName.anonymize),
+  "email"      -> using(Email.anonymize)
+)
+
+// Copy with transformation
+val columns = getTableColumns(sourceConn, "users")
+copyTable(
+  sourceConn = sourceConn,
+  targetConn = targetConn,
+  tableName = "users",
+  columns = columns,
+  transformer = Some(userTransformer)
+)
+```
+
+### Copy Options
+
+```scala
+copyTable(
+  sourceConn = sourceConn,
+  targetConn = targetConn,
+  tableName = "users",
+  columns = columns,
+  whereClause = Some("created_at > '2024-01-01'"),  // Filter rows
+  limit = Some(1000),                                // Limit row count
+  transformer = Some(userTransformer)                // Apply anonymization
+)
+```
+
+### FK-Aware Table Ordering
+
+Copy tables in the correct order based on foreign key dependencies:
+
+```scala
+val tables = getAllTables(sourceConn)
+val fks = getForeignKeys(sourceConn)
+val tableLevels = computeTableLevels(tables, fks)
+val orderedGroups = groupTablesByLevel(tableLevels)
+
+// Copy in order: level 0 (no dependencies), then level 1, etc.
+for (group <- orderedGroups; table <- group) {
+  val cols = getTableColumns(sourceConn, table)
+  copyTable(sourceConn, targetConn, table, cols)
+}
+```
+
+### Filter Propagation
+
+Automatically propagate WHERE clauses through FK relationships:
+
+```scala
+val tableConfigs = Map(
+  "users" -> TableConfig(whereClause = Some("active = true"))
+)
+
+val effectiveFilters = computeEffectiveFilters(tables, fks, tableConfigs)
+// Child tables (orders, profiles) automatically get:
+// "user_id IN (SELECT id FROM users WHERE active = true)"
 ```
 
 ## DSL Reference
@@ -206,6 +284,15 @@ transformer.validateCovers(expectedColumns) match {
 }
 ```
 
+Database-level validation:
+
+```scala
+validateTransformerCoverage(conn, "users", transformer) match {
+  case Left(missing) => println(s"Missing non-PK/FK columns: $missing")
+  case Right(())     => println("All data columns covered")
+}
+```
+
 ## Architecture
 
 ```
@@ -215,12 +302,30 @@ simpleanonymizer/
 │   ├── Hash-based deterministic selection
 │   └── Pre-fetched data lists for performance
 │
-└── RowTransformer.scala           — Composable transformer DSL
-    ├── ValueTransformer           — Leaf-level string transformations
-    ├── JsonNav                    — JSON navigation (Direct, Field, ArrayOf)
-    ├── ColumnSpec                 — Column specification with dependencies
-    ├── TableTransformer           — Composes column specs
-    └── DSL                        — User-facing API
+├── RowTransformer.scala           — Composable transformer DSL
+│   ├── ValueTransformer           — Leaf-level string transformations
+│   ├── JsonNav                    — JSON navigation (Direct, Field, ArrayOf)
+│   ├── ColumnSpec                 — Column specification with dependencies
+│   ├── TableTransformer           — Composes column specs
+│   └── DSL                        — User-facing API
+│
+├── DbSnapshot.scala               — Database copying operations
+│   └── copyTable                  — Copy with optional transformation
+│
+├── DbMetadata.scala               — Schema introspection
+│   ├── getAllTables               — List tables in schema
+│   ├── getTableColumns            — List columns in table
+│   ├── getPrimaryKeyColumns       — Get PK columns
+│   ├── getForeignKeyColumns       — Get FK columns
+│   └── getForeignKeys             — Get all FK relationships
+│
+├── DependencyGraph.scala          — FK dependency analysis
+│   ├── computeTableLevels         — Topological sort by FK depth
+│   └── groupTablesByLevel         — Group tables for parallel copy
+│
+└── FilterPropagation.scala        — WHERE clause propagation
+    ├── generateChildWhereClause   — Derive child filter from parent
+    └── computeEffectiveFilters    — Propagate filters through FKs
 ```
 
 ## License
