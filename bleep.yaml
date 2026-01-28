@@ -9,6 +9,9 @@ projects:
     - io.circe::circe-parser:0.14.15
     - net.datafaker:datafaker:2.5.3
     - org.postgresql:postgresql:42.7.9
+    - com.typesafe.slick::slick:3.6.1
+    - com.github.tminglei::slick-pg:0.23.1
+    - com.github.tminglei::slick-pg_circe-json:0.23.1
     extends: template-cross-all
   tests:
     dependencies:
@@ -20,7 +23,7 @@ projects:
     dependencies:
     - org.scalatest::scalatest:3.2.19
     - org.slf4j:slf4j-simple:2.0.16
-    - org.testcontainers:postgresql:1.21.4
+    - io.github.nafg::slick-additions-testcontainers:0.16.2
     - org.testcontainers:testcontainers:2.0.3
     dependsOn: simple-anonymizer
     extends: template-cross-all

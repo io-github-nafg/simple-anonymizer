@@ -2,10 +2,10 @@ package simpleanonymizer
 
 import scala.collection.mutable
 
+import slick.jdbc.meta.MForeignKey
+
 /** Filter propagation through FK relationships for database subsetting. */
 object FilterPropagation {
-  // Use ForeignKey from DbMetadata
-  type ForeignKey = DbMetadata.ForeignKey
 
   /** Configuration for subsetting a table.
     * @param whereClause
@@ -25,15 +25,15 @@ object FilterPropagation {
   def generateChildWhereClause(
       childTable: String,
       parentFilters: Map[String, String], // parent table -> its WHERE clause
-      fks: Seq[ForeignKey]
+      fks: Seq[MForeignKey]
   ): Option[String] = {
     // Find FKs where this table is the child
-    val relevantFks = fks.filter(_.childTable == childTable)
+    val relevantFks = fks.filter(_.fkTable.name == childTable)
 
     // For each FK pointing to a parent with a filter, generate a subquery condition
     val conditions = relevantFks.flatMap { fk =>
-      parentFilters.get(fk.parentTable).map { parentWhere =>
-        s"${fk.childColumn} IN (SELECT ${fk.parentColumn} FROM ${fk.parentTable} WHERE $parentWhere)"
+      parentFilters.get(fk.pkTable.name).map { parentWhere =>
+        s"${fk.fkColumn} IN (SELECT ${fk.pkColumn} FROM ${fk.pkTable.name} WHERE $parentWhere)"
       }
     }
 
@@ -55,13 +55,13 @@ object FilterPropagation {
     */
   def computeEffectiveFilters(
       tables: Seq[String],
-      fks: Seq[ForeignKey],
+      fks: Seq[MForeignKey],
       tableConfigs: Map[String, TableConfig]
   ): Map[String, Option[String]] = {
     val effectiveFilters = mutable.Map[String, Option[String]]()
 
     // Build reverse lookup: child table -> list of FKs
-    val fksByChild = fks.groupBy(_.childTable)
+    val fksByChild = fks.groupBy(_.fkTable.name)
 
     // Process tables in order (parents before children due to level ordering)
     for (table <- tables) {
@@ -79,7 +79,7 @@ object FilterPropagation {
       } else {
         // Auto-generate filter based on parent tables
         val parentFilters = effectiveFilters.collect {
-          case (t, Some(filter)) if fksByChild.getOrElse(table, Nil).exists(_.parentTable == t) => t -> filter
+          case (t, Some(filter)) if fksByChild.getOrElse(table, Nil).exists(_.pkTable.name == t) => t -> filter
         }.toMap
 
         effectiveFilters(table) = generateChildWhereClause(table, parentFilters, fks)

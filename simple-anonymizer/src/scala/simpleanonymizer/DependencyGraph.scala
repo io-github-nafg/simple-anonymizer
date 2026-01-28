@@ -2,24 +2,24 @@ package simpleanonymizer
 
 import scala.collection.mutable
 
+import slick.jdbc.meta.MForeignKey
+
 /** FK dependency analysis for topological table ordering. */
 object DependencyGraph {
-  // Use ForeignKey from DbMetadata
-  type ForeignKey = DbMetadata.ForeignKey
 
   /** Compute insertion levels for tables based on FK dependencies. Level 0 = tables with no FK dependencies (can be inserted first) Level N = tables that
     * depend only on tables at level < N
     *
     * Tables at the same level can be inserted in parallel. Returns Map[tableName -> level]
     */
-  def computeTableLevels(tables: Seq[String], fks: Seq[ForeignKey]): Map[String, Int] = {
+  def computeTableLevels(tables: Seq[String], fks: Seq[MForeignKey]): Map[String, Int] = {
     // Build dependency map: table -> set of tables it depends on (parents)
     val dependencies: Map[String, Set[String]] = {
       val deps = mutable.Map[String, mutable.Set[String]]()
       for (table <- tables)
         deps(table) = mutable.Set.empty
-      for (fk <- fks if fk.childTable != fk.parentTable) // Ignore self-references
-        deps.get(fk.childTable).foreach(_ += fk.parentTable)
+      for (fk <- fks if fk.fkTable.name != fk.pkTable.name) // Ignore self-references
+        deps.get(fk.fkTable.name).foreach(_ += fk.pkTable.name)
       deps.view.mapValues(_.toSet).toMap
     }
 
