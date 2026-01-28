@@ -67,16 +67,16 @@ object FilterPropagation {
     for (table <- tables) {
       val config = tableConfigs.getOrElse(table, TableConfig())
 
-      if (config.skip) {
+      if (config.skip)
         // Skip this table
         effectiveFilters(table) = None
-      } else if (config.copyAll) {
+      else if (config.copyAll)
         // Copy all rows, no filter
         effectiveFilters(table) = None
-      } else if (config.whereClause.isDefined) {
+      else if (config.whereClause.isDefined)
         // User-specified filter takes precedence
         effectiveFilters(table) = config.whereClause
-      } else {
+      else {
         // Auto-generate filter based on parent tables
         val parentFilters = effectiveFilters.collect {
           case (t, Some(filter)) if fksByChild.getOrElse(table, Nil).exists(_.pkTable.name == t) => t -> filter

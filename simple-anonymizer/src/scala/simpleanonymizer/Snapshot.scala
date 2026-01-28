@@ -107,9 +107,8 @@ class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.D
 
           Future.failed(new IllegalArgumentException(errorMsg.toString))
         }
-    } else {
+    } else
       Future.successful(())
-    }
   }
 
   private def validateAllTransformers(
@@ -136,9 +135,8 @@ class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.D
         }
 
         Future.failed(new IllegalArgumentException(errorMsg.toString))
-      } else {
+      } else
         Future.successful(())
-      }
     }
   }
 
@@ -158,7 +156,7 @@ class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.D
             println(s"[Snapshot] Skipping table: $table")
             results(table) = 0
             copyNext(rest)
-          } else {
+          } else
             for {
               columns <- sourceDb.run(getTableColumns(table, schema))
               count   <- copyTable(
@@ -172,7 +170,6 @@ class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.D
               _        = results(table) = count
               result  <- copyNext(rest)
             } yield result
-          }
       }
 
     copyNext(tables.toList)

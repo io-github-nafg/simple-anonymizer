@@ -259,12 +259,11 @@ object DbSnapshot {
                           // Not transformed - use the original raw object
                           val rawObj = rawRow.objects.getOrElse(column, null)
                           if (rawObj == null) null
-                          else if (isJsonType(columnType)) {
+                          else if (isJsonType(columnType))
                             // For JSON types, we need to wrap in PGobject
                             wrapJsonValue(rawObj.toString, columnType)
-                          } else {
+                          else
                             rawObj
-                          }
                         }
 
                       stmt.setObject(idx + 1, value)
