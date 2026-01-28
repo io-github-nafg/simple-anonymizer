@@ -1,0 +1,42 @@
+$schema: https://raw.githubusercontent.com/oyvindberg/bleep/master/schema.json
+$version: 0.0.14
+jvm:
+  name: graalvm-community:25.0.1
+projects:
+  simple-anonymizer:
+    dependencies:
+    - io.circe::circe-core:0.14.15
+    - io.circe::circe-parser:0.14.15
+    - net.datafaker:datafaker:2.5.3
+    - org.postgresql:postgresql:42.7.9
+    extends: template-cross-all
+  tests:
+    dependencies:
+    - org.scalatest::scalatest:3.2.19
+    - org.slf4j:slf4j-simple:2.0.16
+    - org.testcontainers:postgresql:1.21.4
+    - org.testcontainers:testcontainers:2.0.3
+    dependsOn: simple-anonymizer
+    extends: template-cross-all
+    isTestProject: true
+templates:
+  template-common:
+    platform:
+      name: jvm
+    scala:
+      options: -encoding utf8 -feature -unchecked
+      strict: true
+    source-layout: cross-pure
+  template-cross-all:
+    cross:
+      jvm213:
+        extends: template-scala-2
+      jvm3:
+        extends: template-scala-3
+    extends: template-common
+  template-scala-2:
+    scala:
+      version: 2.13.16
+  template-scala-3:
+    scala:
+      version: 3.3.5

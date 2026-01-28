@@ -1,0 +1,25 @@
+# Bleep
+.bleep/
+
+# Scala/Java
+*.class
+*.jar
+*.log
+target/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.metals/
+.bloop/
+.bsp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.swp
+*.swo
+*~
