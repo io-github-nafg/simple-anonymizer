@@ -13,6 +13,12 @@ projects:
   tests:
     dependencies:
     - org.scalatest::scalatest:3.2.19
+    dependsOn: simple-anonymizer
+    extends: template-cross-all
+    isTestProject: true
+  integration-tests:
+    dependencies:
+    - org.scalatest::scalatest:3.2.19
     - org.slf4j:slf4j-simple:2.0.16
     - org.testcontainers:postgresql:1.21.4
     - org.testcontainers:testcontainers:2.0.3
