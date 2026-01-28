@@ -186,4 +186,78 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
     assert(config.skip === false)
     assert(config.copyAll === false)
   }
+
+  // ============================================================================
+  // Code Snippet Generation
+  // ============================================================================
+
+  test("generateTableSnippet creates valid DSL code") {
+    val snippet = generateTableSnippet("users", Seq("first_name", "email"))
+    assert(snippet.contains("\"users\" -> table("))
+    assert(snippet.contains("\"first_name\" -> passthrough"))
+    assert(snippet.contains("\"email\" -> passthrough"))
+  }
+
+  test("generateTableSnippet handles empty columns") {
+    val snippet = generateTableSnippet("empty_table", Seq.empty)
+    assert(snippet.contains("\"empty_table\" -> table("))
+  }
+
+  test("generateColumnSnippets creates sorted passthrough entries") {
+    val snippet    = generateColumnSnippets(Set("zip", "city", "address"))
+    assert(snippet.contains("\"address\" -> passthrough"))
+    assert(snippet.contains("\"city\" -> passthrough"))
+    assert(snippet.contains("\"zip\" -> passthrough"))
+    // Verify ordering (alphabetical)
+    val addressPos = snippet.indexOf("address")
+    val cityPos    = snippet.indexOf("city")
+    val zipPos     = snippet.indexOf("zip")
+    assert(addressPos < cityPos && cityPos < zipPos)
+  }
+
+  test("generateColumnSnippets handles empty set") {
+    val snippet = generateColumnSnippets(Set.empty)
+    assert(snippet === "")
+  }
+
+  test("generateColumnSnippets handles single column") {
+    val snippet = generateColumnSnippets(Set("name"))
+    assert(snippet === "\"name\" -> passthrough")
+  }
+
+  // ============================================================================
+  // TableSpec
+  // ============================================================================
+
+  test("TableSpec.skip has correct config") {
+    val spec = TableSpec.skip
+    assert(spec.config.skip === true)
+    assert(spec.transformer === None)
+  }
+
+  test("TableSpec.copy has transformer and default config") {
+    import RowTransformer.DSL._
+    val transformer = table("name" -> passthrough)
+    val spec        = TableSpec.copy(transformer)
+    assert(spec.config.skip === false)
+    assert(spec.config.copyAll === false)
+    assert(spec.config.whereClause === None)
+    assert(spec.transformer === Some(transformer))
+  }
+
+  test("TableSpec.copy with whereClause sets filter") {
+    import RowTransformer.DSL._
+    val transformer = table("name" -> passthrough)
+    val spec        = TableSpec.copy(transformer, "active = true")
+    assert(spec.config.whereClause === Some("active = true"))
+    assert(spec.transformer === Some(transformer))
+  }
+
+  test("TableSpec.copyAll ignores FK propagation") {
+    import RowTransformer.DSL._
+    val transformer = table("name" -> passthrough)
+    val spec        = TableSpec.copyAll(transformer)
+    assert(spec.config.copyAll === true)
+    assert(spec.transformer === Some(transformer))
+  }
 }

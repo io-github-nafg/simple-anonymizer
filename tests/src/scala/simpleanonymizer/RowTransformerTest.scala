@@ -205,4 +205,69 @@ class RowTransformerTest extends AnyFunSuite with TypeCheckedTripleEquals {
     assert(maleResult("first_name").nonEmpty)
     assert(femaleResult("first_name").nonEmpty)
   }
+
+  // ============================================================================
+  // ResultKind tests - for type-aware transformations
+  // ============================================================================
+
+  test("passthrough has UseOriginal resultKind") {
+    val spec = passthrough.bindTo("col")
+    assert(spec.resultKind === ResultKind.UseOriginal)
+  }
+
+  test("setNull has SetNull resultKind") {
+    val spec = setNull.bindTo("col")
+    assert(spec.resultKind === ResultKind.SetNull)
+  }
+
+  test("fixed has UseFixed resultKind with correct value") {
+    val spec = fixed(42).bindTo("col")
+    spec.resultKind match {
+      case ResultKind.UseFixed(v) => assert(v === 42)
+      case other                  => fail(s"Expected UseFixed, got $other")
+    }
+  }
+
+  test("using has TransformString resultKind") {
+    val spec = using(_.toUpperCase).bindTo("col")
+    spec.resultKind match {
+      case ResultKind.TransformString(f) => assert(f("hello") === "HELLO")
+      case other                         => fail(s"Expected TransformString, got $other")
+    }
+  }
+
+  test("jsonArray has TransformJson resultKind") {
+    val spec = jsonArray("number")(_ => "XXX").bindTo("phones")
+    spec.resultKind match {
+      case ResultKind.TransformJson(nav, f) =>
+        assert(nav.isInstanceOf[JsonNav.ArrayOf])
+        assert(f("123") === "XXX")
+      case other                            => fail(s"Expected TransformJson, got $other")
+    }
+  }
+
+  // ============================================================================
+  // DSL setNull and fixed tests
+  // ============================================================================
+
+  test("setNull transformer returns null") {
+    val transformer = table("field" -> setNull)
+    val row         = Map("field" -> "some value")
+    val result      = transformer.transform(row)
+    assert(result("field") === null)
+  }
+
+  test("fixed transformer returns the fixed value") {
+    val transformer = table("status" -> fixed("REDACTED"))
+    val row         = Map("status" -> "original")
+    val result      = transformer.transform(row)
+    assert(result("status") === "REDACTED")
+  }
+
+  test("fixed with numeric value") {
+    val transformer = table("count" -> fixed(0))
+    val row         = Map("count" -> "999")
+    val result      = transformer.transform(row)
+    assert(result("count") === "0") // transform returns String
+  }
 }
