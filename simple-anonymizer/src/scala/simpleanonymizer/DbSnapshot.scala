@@ -9,6 +9,7 @@ import slick.jdbc.meta.{MForeignKey, MTable}
 /** Database snapshot and data operations for PostgreSQL using Slick. */
 object DbSnapshot {
   import SlickProfile.api._
+  import SlickProfile.quoteIdentifier
 
   // ============================================================================
   // Metadata queries
@@ -149,18 +150,19 @@ object DbSnapshot {
       limit: Option[Int] = None,
       transformer: Option[RowTransformer.TableTransformer] = None
   )(implicit ec: ExecutionContext): Future[Int] = {
-    val columnList = columns.mkString(", ")
+    val quotedTable = quoteIdentifier(tableName)
+    val columnList = columns.map(quoteIdentifier).mkString(", ")
     val placeholders = columns.map(_ => "?").mkString(", ")
 
     // Add ORDER BY id DESC when using LIMIT for deterministic results (if the table has id column)
-    val orderBy = limit.filter(_ => columns.contains("id")).map(_ => " ORDER BY id DESC").getOrElse("")
+    val orderBy = limit.filter(_ => columns.contains("id")).map(_ => s" ORDER BY ${quoteIdentifier("id")} DESC").getOrElse("")
 
     val selectSql =
-      s"SELECT $columnList FROM $tableName" +
+      s"SELECT $columnList FROM $quotedTable" +
         whereClause.fold("")(w => s" WHERE $w") +
         orderBy +
         limit.fold("")(n => s" LIMIT $n")
-    val insertSql = s"INSERT INTO $tableName ($columnList) VALUES ($placeholders)"
+    val insertSql = s"INSERT INTO $quotedTable ($columnList) VALUES ($placeholders)"
 
     println(s"[DbSnapshot] Copying table: $tableName")
     println(s"[DbSnapshot] SELECT: $selectSql")

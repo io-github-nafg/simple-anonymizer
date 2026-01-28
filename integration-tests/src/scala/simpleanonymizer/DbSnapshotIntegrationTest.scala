@@ -4,6 +4,7 @@ import org.scalatest.{BeforeAndAfterAll, FutureOutcome}
 import org.scalatest.funsuite.FixtureAsyncFunSuite
 import org.testcontainers.utility.MountableFile
 import slick.additions.testcontainers.SlickPostgresContainer
+
 import SlickProfile.api._
 
 class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAll {
@@ -319,6 +320,47 @@ class DbSnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfter
               JOIN users u ON o.user_id = u.id""".as[Int].head
       )
       _ <- assert(joinCount === 12) // All orders should join with users
+    } yield succeed
+  }
+
+  // ============================================================================
+  // Identifier quoting tests - verify that unusual table/column names are handled safely
+  // ============================================================================
+
+  test("copyTable handles table with special characters in name") { targetDb =>
+    // Create a table with a malicious name in both source and target
+    val maliciousTableName = "users; DROP TABLE orders; --"
+    val maliciousColumnName = "data; DELETE FROM users; --"
+    val createTableSql =
+      sqlu"""CREATE TABLE IF NOT EXISTS "#$maliciousTableName" (
+        id SERIAL PRIMARY KEY,
+        "#$maliciousColumnName" VARCHAR(100)
+      )"""
+
+    for {
+      // Create the malicious table in source and target
+      _ <- sourceDb.run(createTableSql)
+      _ <- sourceDb.run(
+        sqlu"""INSERT INTO "#$maliciousTableName" ("#$maliciousColumnName") VALUES ('test data 1'), ('test data 2')"""
+      )
+      _ <- targetDb.run(createTableSql)
+
+      // Verify orders table exists before the copy
+      orderCountBefore <- sourceDb.run(sql"SELECT COUNT(*) FROM orders".as[Int].head)
+      _ <- assert(orderCountBefore === 12, "Orders should exist before copy")
+
+      // Copy the malicious table - quoteIdentifier should make this safe
+      columns <- sourceDb.run(getTableColumns(maliciousTableName))
+      count <- copyTable(sourceDb, targetDb, maliciousTableName, columns)
+      _ <- assert(count === 2, "Should copy 2 rows from malicious table")
+
+      // CRITICAL: Verify orders table still exists (wasn't dropped by injection)
+      orderCountAfter <- sourceDb.run(sql"SELECT COUNT(*) FROM orders".as[Int].head)
+      _ <- assert(orderCountAfter === 12, "Orders table should not be affected by copying malicious-named table")
+
+      // Verify the data was actually copied correctly
+      targetCount <- targetDb.run(sql"""SELECT COUNT(*) FROM "#$maliciousTableName"""".as[Int].head)
+      _ <- assert(targetCount === 2, "Target should have 2 rows")
     } yield succeed
   }
 }
