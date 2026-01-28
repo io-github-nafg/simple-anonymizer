@@ -38,8 +38,7 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
   override def beforeAll(): Unit = sourceContainer.start()
   override def afterAll(): Unit  = sourceContainer.stop()
 
-  case class Fixture(sourceDb: Database, targetDb: Database, targetContainer: SlickPostgresContainer)
-  type FixtureParam = Fixture
+  override type FixtureParam = Snapshot
 
   override def withFixture(test: OneArgAsyncTest): FutureOutcome = {
     val targetContainer = new SlickPostgresContainer()
@@ -50,8 +49,10 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
     targetContainer.start()
     val targetDb        = targetContainer.slickDatabase(SlickProfile.backend)
 
+    val snapshot = new Snapshot(sourceDb, targetDb)
+
     complete {
-      withFixture(test.toNoArgAsyncTest(Fixture(sourceDb, targetDb, targetContainer)))
+      withFixture(test.toNoArgAsyncTest(snapshot))
     }.lastly {
       try targetDb.close()
       finally targetContainer.stop()
@@ -65,9 +66,7 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
   // Example: Copy entire database with anonymization
   // ---------------------------------------------------------------------------
 
-  test("copy entire database with PII anonymization") { fixture =>
-    val snapshot = new Snapshot(fixture.sourceDb, fixture.targetDb)
-
+  test("copy entire database with PII anonymization") { snapshot =>
     // Configure table handling
     val tableConfigs = Map(
       // Filter to only active-ish data
@@ -112,9 +111,7 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
   // Example: Minimal passthrough for non-PII tables
   // ---------------------------------------------------------------------------
 
-  test("passthrough for tables without sensitive data") { fixture =>
-    val snapshot = new Snapshot(fixture.sourceDb, fixture.targetDb)
-
+  test("passthrough for tables without sensitive data") { snapshot =>
     val tableConfigs = Map(
       "users"       -> TableConfig(skip = true),
       "orders"      -> TableConfig(skip = true),
@@ -139,9 +136,7 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
   // Example: Error messages with helpful snippets
   // ---------------------------------------------------------------------------
 
-  test("missing table shows helpful error with code snippet") { fixture =>
-    val snapshot = new Snapshot(fixture.sourceDb, fixture.targetDb)
-
+  test("missing table shows helpful error with code snippet") { snapshot =>
     // Only define transformer for users, missing others
     val transformers = Map(
       "users" -> table(
@@ -161,9 +156,7 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
     }
   }
 
-  test("missing column shows helpful error with code snippet") { fixture =>
-    val snapshot = new Snapshot(fixture.sourceDb, fixture.targetDb)
-
+  test("missing column shows helpful error with code snippet") { snapshot =>
     val tableConfigs = Map(
       "orders"      -> TableConfig(skip = true),
       "order_items" -> TableConfig(skip = true),
