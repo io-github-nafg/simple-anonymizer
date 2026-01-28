@@ -227,8 +227,9 @@ object DbSnapshot {
           val batchSize = 1000
           val batches   = rows.grouped(batchSize).toList
 
-          // Get set of columns that will be transformed
-          val transformedColumns = transformer.map(_.columnNames).getOrElse(Set.empty)
+          // Build a map of column name -> ColumnSpec for quick lookup
+          val columnSpecs: Map[String, RowTransformer.ColumnSpec] =
+            transformer.map(_.columns.map(spec => spec.columnName -> spec).toMap).getOrElse(Map.empty)
 
           // Process batches sequentially
           def processBatches(remaining: List[Seq[RawRow]], count: Int): Future[Int] =
@@ -242,29 +243,50 @@ object DbSnapshot {
                   var batchCount = 0
 
                   for (rawRow <- batch) {
-                    // Apply transformation to string values (only for columns that are being transformed)
-                    val transformedStrings = transformer.fold(rawRow.strings)(_.transform(rawRow.strings))
-
                     for (idx <- columns.indices) {
                       val column     = columns(idx)
                       val columnType = columnTypes(idx)
 
-                      val value: AnyRef =
-                        if (transformedColumns.contains(column)) {
-                          // This column was transformed - use the transformed string value
-                          val transformedValue = transformedStrings.getOrElse(column, null)
-                          if (isJsonType(columnType)) wrapJsonValue(transformedValue, columnType)
-                          else transformedValue
-                        } else {
-                          // Not transformed - use the original raw object
+                      val value: AnyRef = columnSpecs.get(column) match {
+                        case Some(spec) =>
+                          // Use resultKind to determine how to get the value
+                          spec.resultKind match {
+                            case RowTransformer.ResultKind.UseOriginal =>
+                              // Passthrough - preserve original type
+                              val rawObj = rawRow.objects.getOrElse(column, null)
+                              if (rawObj == null) null
+                              else if (isJsonType(columnType)) wrapJsonValue(rawObj.toString, columnType)
+                              else rawObj
+
+                            case RowTransformer.ResultKind.SetNull =>
+                              null
+
+                            case RowTransformer.ResultKind.UseFixed(v) =>
+                              if (v == null) null
+                              else if (isJsonType(columnType)) wrapJsonValue(v.toString, columnType)
+                              else v.asInstanceOf[AnyRef]
+
+                            case RowTransformer.ResultKind.TransformString(f) =>
+                              val str         = rawRow.strings.getOrElse(column, "")
+                              val transformed = f(str)
+                              if (isJsonType(columnType)) wrapJsonValue(transformed, columnType)
+                              else transformed
+
+                            case RowTransformer.ResultKind.TransformJson(nav, f) =>
+                              // For JSON columns with navigation, apply the transformation
+                              val str         = rawRow.strings.getOrElse(column, "")
+                              val transformed = nav.wrap(RowTransformer.ValueTransformer.Simple(f))(str)
+                              if (isJsonType(columnType)) wrapJsonValue(transformed, columnType)
+                              else transformed
+                          }
+
+                        case None =>
+                          // Column not in transformer - use original raw object
                           val rawObj = rawRow.objects.getOrElse(column, null)
                           if (rawObj == null) null
-                          else if (isJsonType(columnType))
-                            // For JSON types, we need to wrap in PGobject
-                            wrapJsonValue(rawObj.toString, columnType)
-                          else
-                            rawObj
-                        }
+                          else if (isJsonType(columnType)) wrapJsonValue(rawObj.toString, columnType)
+                          else rawObj
+                      }
 
                       stmt.setObject(idx + 1, value)
                     }

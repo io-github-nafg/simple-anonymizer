@@ -69,8 +69,9 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
   test("copy entire database with PII anonymization") { snapshot =>
     // Configure table handling
     val tableConfigs = Map(
-      // Filter to only active-ish data
-      "users"      -> TableConfig(whereClause = Some("id <= 5")),
+      // Filter to only first 10 users (all in test data)
+      // Note: child tables (orders, profiles) automatically inherit filters via FK propagation
+      "users"      -> TableConfig(whereClause = Some("id <= 10")),
       // Skip categories entirely
       "categories" -> TableConfig(skip = true)
     )
@@ -83,12 +84,12 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
         "email"      -> using(Email.anonymize)
       ),
       "orders"      -> table(
-        "status" -> passthrough
-        // Note: 'total' is numeric, transformers only handle string columns
+        "status" -> passthrough,
+        "total"  -> passthrough // numeric columns now preserve their type
       ),
       "order_items" -> table(
-        "product_name" -> passthrough
-        // Note: 'quantity' is integer, transformers only handle string columns
+        "product_name" -> passthrough,
+        "quantity"     -> passthrough // integer columns now preserve their type
       ),
       "profiles"    -> table(
         "phones"   -> jsonArray("number")(PhoneNumber.anonymize),
@@ -100,7 +101,7 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
     for {
       result <- snapshot.copy(tableConfigs, transformers)
       // Verify results
-      _      <- assert(result("users") == 5, "Should copy 5 users")
+      _      <- assert(result("users") == 10, "Should copy all 10 users")
       _      <- assert(result("categories") == 0, "Categories should be skipped")
       _      <- assert(result("orders") > 0, "Should copy some orders")
       _      <- assert(result("profiles") > 0, "Should copy some profiles")

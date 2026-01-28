@@ -7,14 +7,36 @@ import io.circe.syntax._
 /** Composable row transformation for table anonymization.
   *
   * Provides a DSL for specifying column transformations including:
-  *   - Simple passthrough
-  *   - Value transformation with DeterministicAnonymizer
+  *   - Simple passthrough (preserves original database type)
+  *   - Value transformation with DeterministicAnonymizer (String => String)
   *   - JSON navigation (fields within arrays)
   *   - Dependent columns (e.g., zip code based on state)
+  *   - Fixed values and null
   */
 object RowTransformer {
 
   type Row = Map[String, String]
+
+  // ============================================================================
+  // Result Kind - describes what kind of value a transformer produces
+  // ============================================================================
+
+  /** Describes what kind of result a column transformation produces.
+    *
+    * This enables DbSnapshot to handle different transformation types appropriately:
+    *   - UseOriginal: preserve the original database value and type
+    *   - SetNull: insert null
+    *   - UseFixed: insert a fixed value
+    *   - TransformString: apply a String => String function
+    */
+  sealed trait ResultKind
+  object ResultKind {
+    case object UseOriginal                                     extends ResultKind
+    case object SetNull                                         extends ResultKind
+    case class UseFixed(value: Any)                             extends ResultKind
+    case class TransformString(f: String => String)             extends ResultKind
+    case class TransformJson(nav: JsonNav, f: String => String) extends ResultKind
+  }
 
   // ============================================================================
   // Value Transformers
@@ -22,14 +44,27 @@ object RowTransformer {
 
   sealed trait ValueTransformer {
     def apply(input: String): String
+    def resultKind: ResultKind
   }
   object ValueTransformer       {
     case object PassThrough extends ValueTransformer {
       def apply(input: String): String = input
+      def resultKind: ResultKind       = ResultKind.UseOriginal
+    }
+
+    case object SetNull extends ValueTransformer {
+      def apply(input: String): String = null
+      def resultKind: ResultKind       = ResultKind.SetNull
+    }
+
+    case class Fixed(value: Any) extends ValueTransformer {
+      def apply(input: String): String = if (value == null) null else value.toString
+      def resultKind: ResultKind       = ResultKind.UseFixed(value)
     }
 
     case class Simple(f: String => String) extends ValueTransformer {
       def apply(input: String): String = f(input)
+      def resultKind: ResultKind       = ResultKind.TransformString(f)
     }
   }
 
@@ -95,6 +130,7 @@ object RowTransformer {
     def columnName: String
     def dependsOn: Set[String]
     def transform(row: Row): String
+    def resultKind: ResultKind
   }
   object ColumnSpec       {
     case class Independent(columnName: String, nav: JsonNav, transformer: ValueTransformer) extends ColumnSpec {
@@ -102,6 +138,12 @@ object RowTransformer {
       def transform(row: Row): String = {
         val originalValue = row.getOrElse(columnName, "")
         nav.wrap(transformer)(originalValue)
+      }
+      def resultKind: ResultKind      = nav match {
+        case JsonNav.Direct => transformer.resultKind
+        case _              =>
+          // For JSON navigation, we always transform strings
+          ResultKind.TransformJson(nav, transformer.apply)
       }
     }
 
@@ -112,6 +154,29 @@ object RowTransformer {
         val transformer   = transformerFactory(row)
         nav.wrap(transformer)(originalValue)
       }
+      // Dependent columns always do string transformation since the transformer is computed at runtime
+      def resultKind: ResultKind      = ResultKind.TransformString(identity)
+    }
+
+    /** Passthrough column - preserves original database type */
+    case class Passthrough(columnName: String) extends ColumnSpec {
+      def dependsOn: Set[String]      = Set.empty
+      def transform(row: Row): String = row.getOrElse(columnName, "")
+      def resultKind: ResultKind      = ResultKind.UseOriginal
+    }
+
+    /** Null column - always inserts null */
+    case class Null(columnName: String) extends ColumnSpec {
+      def dependsOn: Set[String]      = Set.empty
+      def transform(row: Row): String = null
+      def resultKind: ResultKind      = ResultKind.SetNull
+    }
+
+    /** Fixed value column */
+    case class FixedValue(columnName: String, value: Any) extends ColumnSpec {
+      def dependsOn: Set[String]      = Set.empty
+      def transform(row: Row): String = if (value == null) null else value.toString
+      def resultKind: ResultKind      = ResultKind.UseFixed(value)
     }
   }
 
@@ -142,22 +207,34 @@ object RowTransformer {
   }
   object UnboundTransformer       {
 
-    import ColumnSpec._
     import JsonNav.Direct
-    import ValueTransformer._
 
+    /** Passthrough - preserves original database type */
     case object Passthrough extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnSpec = Independent(columnName, Direct, PassThrough)
+      def bindTo(columnName: String): ColumnSpec = ColumnSpec.Passthrough(columnName)
     }
 
+    /** Null - always inserts null */
+    case object SetNull extends UnboundTransformer {
+      def bindTo(columnName: String): ColumnSpec = ColumnSpec.Null(columnName)
+    }
+
+    /** Fixed value - inserts a constant value of any type */
+    case class Fixed(value: Any) extends UnboundTransformer {
+      def bindTo(columnName: String): ColumnSpec = ColumnSpec.FixedValue(columnName, value)
+    }
+
+    /** Simple string transformation */
     case class Simple(f: String => String) extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnSpec = Independent(columnName, Direct, ValueTransformer.Simple(f))
+      def bindTo(columnName: String): ColumnSpec = ColumnSpec.Independent(columnName, Direct, ValueTransformer.Simple(f))
     }
 
+    /** JSON navigation with string transformation */
     case class WithJson(nav: JsonNav, f: String => String) extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnSpec = Independent(columnName, nav, ValueTransformer.Simple(f))
+      def bindTo(columnName: String): ColumnSpec = ColumnSpec.Independent(columnName, nav, ValueTransformer.Simple(f))
     }
 
+    /** Dependent transformation (depends on other column values) */
     case class Dependent(deps: Set[String], f: Row => String => String) extends UnboundTransformer {
       def bindTo(columnName: String): ColumnSpec =
         ColumnSpec.Dependent(columnName, deps, Direct, row => ValueTransformer.Simple(f(row)))
@@ -199,16 +276,26 @@ object RowTransformer {
 
     import UnboundTransformer._
 
+    /** Passthrough - preserves original database type (not just string identity) */
     val passthrough: UnboundTransformer = Passthrough
 
+    /** Set to null */
+    val setNull: UnboundTransformer = SetNull
+
+    /** Fixed value of any type */
+    def fixed[A](value: A): UnboundTransformer = Fixed(value)
+
+    /** Apply a String => String transformation */
     def using(f: String => String): UnboundTransformer = Simple(f)
 
+    /** Transform a field within JSON arrays */
     def jsonArray(field: String)(f: String => String): UnboundTransformer =
       WithJson(JsonNav.ArrayOf(JsonNav.Field(field)), f)
 
     /** Reference another column for dependent transformers */
     def col(name: String): ColumnRef = ColumnRef(name)
 
+    /** Build a table transformer from column bindings */
     def table(bindings: (String, UnboundTransformer)*): TableTransformer =
       TableTransformer(bindings.map { case (name, t) => t.bindTo(name) })
   }
