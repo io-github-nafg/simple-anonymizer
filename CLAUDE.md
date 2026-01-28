@@ -63,3 +63,4 @@ Composable transformer system:
 - Scala 2.13 and Scala 3 cross-compilation
 - Use `source-layout: cross-pure` for Bleep
 - Follow existing patterns in the codebase
+- Always run `bleep fmt` after editing code
