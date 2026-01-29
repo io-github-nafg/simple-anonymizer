@@ -81,7 +81,8 @@ class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.D
       fks          <- sourceDb.run(getForeignKeys(schema))
       tableLevels   = computeTableLevels(tables, fks)
       orderedGroups = groupTablesByLevel(tableLevels)
-      filters       = computeEffectiveFilters(tables, fks, tableConfigs)
+      orderedTables = orderedGroups.flatten
+      filters       = computeEffectiveFilters(orderedTables, fks, tableConfigs)
       // Validate that all non-skipped tables have transformers
       _            <- validateTableCoverage(tables, skippedTables, transformers)
       // Validate that each transformer covers all required columns
