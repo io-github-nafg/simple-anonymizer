@@ -115,7 +115,7 @@ for {
         "last_name"  -> using(LastName.anonymize),
         "email"      -> using(Email.anonymize)
       ),
-      whereClause = "active = true"  // Optional filter
+      where = "active = true"  // Optional filter
     ),
     "orders"     -> copy(table(
       "description" -> passthrough,
@@ -132,8 +132,7 @@ for {
 |--------|-------------|
 | `skip` | Skip table entirely |
 | `copy(transformer)` | Copy with transformer |
-| `copy(transformer, whereClause)` | Copy with filter |
-| `copyAll(transformer)` | Copy all rows (ignore FK filter propagation) |
+| `copy(transformer, where)` | Copy with filter |
 
 If you miss a table or column, the error message includes copy-pastable code snippets:
 

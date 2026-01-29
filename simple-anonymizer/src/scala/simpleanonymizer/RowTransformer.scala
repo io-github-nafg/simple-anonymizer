@@ -15,7 +15,7 @@ import io.circe.syntax._
   */
 object RowTransformer {
 
-  type Row = Map[String, String]
+  private type Row = Map[String, String]
 
   // ============================================================================
   // Column Plan - single ADT for column transformation
@@ -28,7 +28,7 @@ object RowTransformer {
   }
   object ColumnPlan       {
 
-    /** Passthrough - preserve original database value and type */
+    /** Passthrough - preserve the original database value and type */
     case class Passthrough(columnName: String) extends ColumnPlan {
       def dependsOn: Set[String] = Set.empty
     }

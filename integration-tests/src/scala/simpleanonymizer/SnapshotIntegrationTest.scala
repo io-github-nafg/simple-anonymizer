@@ -68,35 +68,33 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
 
     for {
       result <- snapshot.copy(
-                  Map(
-                    "users"       -> copy(
-                      table(
-                        "first_name" -> using(FirstName.anonymize),
-                        "last_name"  -> using(LastName.anonymize),
-                        "email"      -> using(Email.anonymize)
-                      ),
-                      whereClause = "id <= 10"
+                  "users"       -> copy(
+                    table(
+                      "first_name" -> using(FirstName.anonymize),
+                      "last_name"  -> using(LastName.anonymize),
+                      "email"      -> using(Email.anonymize)
                     ),
-                    "orders"      -> copy(
-                      table(
-                        "status" -> passthrough,
-                        "total"  -> passthrough
-                      )
-                    ),
-                    "order_items" -> copy(
-                      table(
-                        "product_name" -> passthrough,
-                        "quantity"     -> passthrough
-                      )
-                    ),
-                    "profiles"    -> copy(
-                      table(
-                        "phones"   -> jsonArray("number")(PhoneNumber.anonymize),
-                        "settings" -> passthrough
-                      )
-                    ),
-                    "categories"  -> skip
-                  )
+                    where = "id <= 10"
+                  ),
+                  "orders"      -> copy(
+                    table(
+                      "status" -> passthrough,
+                      "total"  -> passthrough
+                    )
+                  ),
+                  "order_items" -> copy(
+                    table(
+                      "product_name" -> passthrough,
+                      "quantity"     -> passthrough
+                    )
+                  ),
+                  "profiles"    -> copy(
+                    table(
+                      "phones"   -> jsonArray("number")(PhoneNumber.anonymize),
+                      "settings" -> passthrough
+                    )
+                  ),
+                  "categories"  -> skip
                 )
       // Verify row counts
       _      <- assert(result("users") == 10)
@@ -120,38 +118,36 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
 
     for {
       result <- snapshot.copy(
-                  Map(
-                    // Only copy first 3 users
-                    "users"       -> copy(
-                      table(
-                        "first_name" -> passthrough,
-                        "last_name"  -> passthrough,
-                        "email"      -> passthrough
-                      ),
-                      whereClause = "id <= 3"
+                  // Only copy first 3 users
+                  "users"       -> copy(
+                    table(
+                      "first_name" -> passthrough,
+                      "last_name"  -> passthrough,
+                      "email"      -> passthrough
                     ),
-                    // Orders will be auto-filtered to only those for users 1-3
-                    "orders"      -> copy(
-                      table(
-                        "status" -> passthrough,
-                        "total"  -> passthrough
-                      )
-                    ),
-                    // Order items filtered through orders
-                    "order_items" -> copy(
-                      table(
-                        "product_name" -> passthrough,
-                        "quantity"     -> passthrough
-                      )
-                    ),
-                    "profiles"    -> copy(
-                      table(
-                        "phones"   -> passthrough,
-                        "settings" -> passthrough
-                      )
-                    ),
-                    "categories"  -> skip
-                  )
+                    where = "id <= 3"
+                  ),
+                  // Orders will be auto-filtered to only those for users 1-3
+                  "orders"      -> copy(
+                    table(
+                      "status" -> passthrough,
+                      "total"  -> passthrough
+                    )
+                  ),
+                  // Order items filtered through orders
+                  "order_items" -> copy(
+                    table(
+                      "product_name" -> passthrough,
+                      "quantity"     -> passthrough
+                    )
+                  ),
+                  "profiles"    -> copy(
+                    table(
+                      "phones"   -> passthrough,
+                      "settings" -> passthrough
+                    )
+                  ),
+                  "categories"  -> skip
                 )
       _      <- assert(result("users") == 3)
       // Verify only orders for users 1-3 were copied
@@ -169,20 +165,18 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
     val targetDb = fixture.targetDb
 
     for {
-      result <- snapshot.copy(
-                  Map(
-                    "users"       -> copy(
-                      table(
-                        "first_name" -> passthrough,
-                        "last_name"  -> passthrough,
-                        "email"      -> setNull // Clear email completely
-                      )
-                    ),
-                    "orders"      -> skip,
-                    "order_items" -> skip,
-                    "profiles"    -> skip,
-                    "categories"  -> skip
-                  )
+      _      <- snapshot.copy(
+                  "users"       -> copy(
+                    table(
+                      "first_name" -> passthrough,
+                      "last_name"  -> passthrough,
+                      "email"      -> setNull // Clear email completely
+                    )
+                  ),
+                  "orders"      -> skip,
+                  "order_items" -> skip,
+                  "profiles"    -> skip,
+                  "categories"  -> skip
                 )
       // Verify emails are null
       emails <- targetDb.run(sql"SELECT email FROM users WHERE email IS NOT NULL".as[String])
@@ -195,56 +189,23 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
     val targetDb = fixture.targetDb
 
     for {
-      result <- snapshot.copy(
-                  Map(
-                    "users"       -> copy(
-                      table(
-                        "first_name" -> passthrough,
-                        "last_name"  -> passthrough,
-                        "email"      -> fixed("redacted@example.com")
-                      )
-                    ),
-                    "orders"      -> skip,
-                    "order_items" -> skip,
-                    "profiles"    -> skip,
-                    "categories"  -> skip
-                  )
+      _      <- snapshot.copy(
+                  "users"       -> copy(
+                    table(
+                      "first_name" -> passthrough,
+                      "last_name"  -> passthrough,
+                      "email"      -> fixed("redacted@example.com")
+                    )
+                  ),
+                  "orders"      -> skip,
+                  "order_items" -> skip,
+                  "profiles"    -> skip,
+                  "categories"  -> skip
                 )
       // Verify all emails are the fixed value
       emails <- targetDb.run(sql"SELECT DISTINCT email FROM users".as[String])
       _      <- assert(emails.length == 1)
       _      <- assert(emails.head == "redacted@example.com")
-    } yield succeed
-  }
-
-  // ---------------------------------------------------------------------------
-  // Reference tables with copyAll
-  // ---------------------------------------------------------------------------
-
-  test("copyAll ignores FK filter propagation") { fixture =>
-    val snapshot = fixture.snapshot
-    val targetDb = fixture.targetDb
-
-    for {
-      result <- snapshot.copy(
-                  Map(
-                    "users"       -> copy(
-                      table(
-                        "first_name" -> passthrough,
-                        "last_name"  -> passthrough,
-                        "email"      -> passthrough
-                      ),
-                      whereClause = "id <= 2" // Only 2 users
-                    ),
-                    "orders"      -> skip,
-                    "order_items" -> skip,
-                    "profiles"    -> skip,
-                    // Categories is self-referential, copyAll ensures all are copied
-                    "categories"  -> copyAll(table("name" -> passthrough))
-                  )
-                )
-      _      <- assert(result("users") == 2)
-      _      <- assert(result("categories") == 10, "All categories should be copied with copyAll")
     } yield succeed
   }
 
@@ -257,25 +218,23 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
     val targetDb = fixture.targetDb
 
     for {
-      result <- snapshot.copy(
-                  Map(
-                    "users"       -> copyAll(
-                      table(
-                        "first_name" -> passthrough,
-                        "last_name"  -> passthrough,
-                        "email"      -> passthrough
-                      )
-                    ),
-                    "orders"      -> skip,
-                    "order_items" -> skip,
-                    "profiles"    -> copyAll(
-                      table(
-                        "phones"   -> jsonArray("number")(PhoneNumber.anonymize),
-                        "settings" -> passthrough
-                      )
-                    ),
-                    "categories"  -> skip
-                  )
+      _      <- snapshot.copy(
+                  "users"       -> copy(
+                    table(
+                      "first_name" -> passthrough,
+                      "last_name"  -> passthrough,
+                      "email"      -> passthrough
+                    )
+                  ),
+                  "orders"      -> skip,
+                  "order_items" -> skip,
+                  "profiles"    -> copy(
+                    table(
+                      "phones"   -> jsonArray("number")(PhoneNumber.anonymize),
+                      "settings" -> passthrough
+                    )
+                  ),
+                  "categories"  -> skip
                 )
       // Verify phone numbers were anonymized
       phones <- targetDb.run(sql"SELECT phones FROM profiles WHERE id = 1".as[String])
@@ -296,29 +255,27 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
 
     for {
       _      <- snapshot.copy(
-                  Map(
-                    "users"       -> copyAll(
-                      table(
-                        "first_name" -> passthrough,
-                        "last_name"  -> passthrough,
-                        "email"      -> passthrough
-                      )
-                    ),
-                    "orders"      -> copyAll(
-                      table(
-                        "status" -> passthrough,
-                        "total"  -> passthrough // DECIMAL(10,2)
-                      )
-                    ),
-                    "order_items" -> copyAll(
-                      table(
-                        "product_name" -> passthrough,
-                        "quantity"     -> passthrough // INTEGER
-                      )
-                    ),
-                    "profiles"    -> skip,
-                    "categories"  -> skip
-                  )
+                  "users"       -> copy(
+                    table(
+                      "first_name" -> passthrough,
+                      "last_name"  -> passthrough,
+                      "email"      -> passthrough
+                    )
+                  ),
+                  "orders"      -> copy(
+                    table(
+                      "status" -> passthrough,
+                      "total"  -> passthrough // DECIMAL(10,2)
+                    )
+                  ),
+                  "order_items" -> copy(
+                    table(
+                      "product_name" -> passthrough,
+                      "quantity"     -> passthrough // INTEGER
+                    )
+                  ),
+                  "profiles"    -> skip,
+                  "categories"  -> skip
                 )
       // Verify DECIMAL precision is preserved
       totals <- targetDb.run(sql"SELECT total FROM orders WHERE id = 1".as[BigDecimal])
@@ -335,16 +292,15 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
 
   test("missing table shows helpful error with code snippet") { fixture =>
     val result = fixture.snapshot.copy(
-      Map(
-        "users" -> copy(
-          table(
-            "first_name" -> passthrough,
-            "last_name"  -> passthrough,
-            "email"      -> passthrough
-          )
+      "users" -> copy(
+        table(
+          "first_name" -> passthrough,
+          "last_name"  -> passthrough,
+          "email"      -> passthrough
         )
-        // Missing: orders, order_items, profiles, categories
       )
+      // Missing: orders, order_items, profiles, categories
+
     )
 
     recoverToExceptionIf[IllegalArgumentException](result).map { ex =>
@@ -355,19 +311,17 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
 
   test("missing column shows helpful error with code snippet") { fixture =>
     val result = fixture.snapshot.copy(
-      Map(
-        "users"       -> copy(
-          table(
-            "first_name" -> passthrough,
-            "last_name"  -> passthrough
-            // Missing: email
-          )
-        ),
-        "orders"      -> skip,
-        "order_items" -> skip,
-        "profiles"    -> skip,
-        "categories"  -> skip
-      )
+      "users"       -> copy(
+        table(
+          "first_name" -> passthrough,
+          "last_name"  -> passthrough
+          // Missing: email
+        )
+      ),
+      "orders"      -> skip,
+      "order_items" -> skip,
+      "profiles"    -> skip,
+      "categories"  -> skip
     )
 
     recoverToExceptionIf[IllegalArgumentException](result).map { ex =>
@@ -386,22 +340,20 @@ class SnapshotIntegrationTest extends FixtureAsyncFunSuite with BeforeAndAfterAl
 
     for {
       _     <- snapshot.copy(
-                 Map(
-                   "users"       -> copy(
-                     table(
-                       "first_name" -> using(FirstName.anonymize),
-                       "last_name"  -> using(LastName.anonymize),
-                       "email"      -> using(Email.anonymize)
-                     )
-                   ),
-                   "orders"      -> skip,
-                   "order_items" -> skip,
-                   "profiles"    -> skip,
-                   "categories"  -> skip
-                 )
+                 "users"       -> copy(
+                   table(
+                     "first_name" -> using(FirstName.anonymize),
+                     "last_name"  -> using(LastName.anonymize),
+                     "email"      -> using(Email.anonymize)
+                   )
+                 ),
+                 "orders"      -> skip,
+                 "order_items" -> skip,
+                 "profiles"    -> skip,
+                 "categories"  -> skip
                )
       // Get anonymized names for same original names
-      names <- targetDb.run(
+      _     <- targetDb.run(
                  sql"""SELECT first_name FROM users WHERE id IN (
                     SELECT id FROM users ORDER BY id
                  )""".as[String]

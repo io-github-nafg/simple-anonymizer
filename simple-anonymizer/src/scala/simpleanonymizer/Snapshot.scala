@@ -49,30 +49,10 @@ class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.D
     * @throws IllegalArgumentException
     *   if any table in the database is not specified, or if a transformer is missing columns. Error messages include copy-pastable code snippets.
     */
-  def copy(tableSpecs: Map[String, TableSpec]): Future[Map[String, Int]] = {
-    val tableConfigs = tableSpecs.view.mapValues(_.config).toMap
-    val transformers = tableSpecs.collect { case (name, spec) if spec.transformer.isDefined => name -> spec.transformer.get }
-    copy(tableConfigs, transformers)
-  }
-
-  /** Copy all tables from source to target with transformation.
-    *
-    * Tables are copied in topological order based on FK dependencies. Filters are automatically propagated from parent tables to child tables through FK
-    * relationships.
-    *
-    * @param tableConfigs
-    *   Configuration for each table (where clause, skip, copyAll)
-    * @param transformers
-    *   Row transformers for all non-skipped tables (required)
-    * @return
-    *   Map of table name to number of rows copied
-    * @throws IllegalArgumentException
-    *   if any non-skipped table is missing a transformer, or if a transformer is missing columns. Error messages include copy-pastable code snippets.
-    */
-  def copy(
-      tableConfigs: Map[String, TableConfig],
-      transformers: Map[String, RowTransformer.TableTransformer]
-  ): Future[Map[String, Int]] = {
+  def copy(tableSpecs: (String, TableSpec)*): Future[Map[String, Int]] = {
+    val tableSpecsMap = tableSpecs.toMap
+    val tableConfigs  = tableSpecsMap.view.mapValues(_.config).toMap
+    val transformers  = tableSpecsMap.collect { case (name, spec) if spec.transformer.isDefined => name -> spec.transformer.get }
     val skippedTables = tableConfigs.collect { case (table, config) if config.skip => table }.toSet
 
     for {

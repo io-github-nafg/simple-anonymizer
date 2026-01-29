@@ -151,7 +151,7 @@ object DbSnapshot {
   // ============================================================================
 
   /** Configuration for subsetting a table. */
-  case class TableConfig(whereClause: Option[String] = None, skip: Boolean = false, copyAll: Boolean = false)
+  case class TableConfig(whereClause: Option[String] = None, skip: Boolean = false)
 
   /** Specification for how to handle a table during snapshot copy. */
   sealed trait TableSpec {
@@ -161,19 +161,18 @@ object DbSnapshot {
   object TableSpec       {
 
     /** Skip this table entirely */
-    case object Skip extends TableSpec {
+    private case object Skip extends TableSpec {
       def transformer: Option[RowTransformer.TableTransformer] = None
       def config: TableConfig                                  = TableConfig(skip = true)
     }
 
     /** Copy with the given transformer */
-    case class Copy(
+    private case class Copy(
         t: RowTransformer.TableTransformer,
-        whereClause: Option[String] = None,
-        copyAll: Boolean = false
+        whereClause: Option[String] = None
     ) extends TableSpec {
       def transformer: Option[RowTransformer.TableTransformer] = Some(t)
-      def config: TableConfig                                  = TableConfig(whereClause = whereClause, copyAll = copyAll)
+      def config: TableConfig                                  = TableConfig(whereClause = whereClause)
     }
 
     /** Skip this table entirely */
@@ -183,11 +182,8 @@ object DbSnapshot {
     def copy(transformer: RowTransformer.TableTransformer): TableSpec = Copy(transformer)
 
     /** Copy with the given transformer and where clause filter */
-    def copy(transformer: RowTransformer.TableTransformer, whereClause: String): TableSpec =
-      Copy(transformer, whereClause = Some(whereClause))
-
-    /** Copy all rows (ignore FK propagation filters) */
-    def copyAll(transformer: RowTransformer.TableTransformer): TableSpec = Copy(transformer, copyAll = true)
+    def copy(transformer: RowTransformer.TableTransformer, where: String): TableSpec =
+      Copy(transformer, whereClause = Some(where))
   }
 
   /** Generate a WHERE clause for a child table based on the parent table's filter. */
@@ -219,8 +215,6 @@ object DbSnapshot {
       val config = tableConfigs.getOrElse(table, TableConfig())
 
       if (config.skip)
-        effectiveFilters(table) = None
-      else if (config.copyAll)
         effectiveFilters(table) = None
       else if (config.whereClause.isDefined)
         effectiveFilters(table) = config.whereClause
@@ -323,7 +317,7 @@ object DbSnapshot {
           val batchSize = 1000
           val batches   = rows.grouped(batchSize).toList
 
-          // Build a map of column name -> ColumnPlan for quick lookup
+          // Build a map of column name -> ColumnPlan for a quick lookup
           val columnPlans: Map[String, RowTransformer.ColumnPlan] =
             transformer.map(_.columns.map(plan => plan.columnName -> plan).toMap).getOrElse(Map.empty)
 

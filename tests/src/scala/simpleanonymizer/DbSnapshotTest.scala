@@ -148,16 +148,14 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
     assert(filters("users") === Some("active = true"))
   }
 
-  test("computeEffectiveFilters returns None for skip and copyAll") {
-    val tables  = Seq("audit_log", "config")
+  test("computeEffectiveFilters returns None for skip") {
+    val tables  = Seq("audit_log")
     val fks     = Seq.empty[MForeignKey]
     val configs = Map(
-      "audit_log" -> TableConfig(skip = true),
-      "config"    -> TableConfig(copyAll = true)
+      "audit_log" -> TableConfig(skip = true)
     )
     val filters = computeEffectiveFilters(tables, fks, configs)
     assert(filters("audit_log") === None)
-    assert(filters("config") === None)
   }
 
   test("computeEffectiveFilters propagates filters through FK chain") {
@@ -184,7 +182,6 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
     val config = TableConfig()
     assert(config.whereClause === None)
     assert(config.skip === false)
-    assert(config.copyAll === false)
   }
 
   // ============================================================================
@@ -240,7 +237,6 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
     val transformer = table("name" -> passthrough)
     val spec        = TableSpec.copy(transformer)
     assert(spec.config.skip === false)
-    assert(spec.config.copyAll === false)
     assert(spec.config.whereClause === None)
     assert(spec.transformer === Some(transformer))
   }
@@ -250,14 +246,6 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
     val transformer = table("name" -> passthrough)
     val spec        = TableSpec.copy(transformer, "active = true")
     assert(spec.config.whereClause === Some("active = true"))
-    assert(spec.transformer === Some(transformer))
-  }
-
-  test("TableSpec.copyAll ignores FK propagation") {
-    import RowTransformer.DSL._
-    val transformer = table("name" -> passthrough)
-    val spec        = TableSpec.copyAll(transformer)
-    assert(spec.config.copyAll === true)
     assert(spec.transformer === Some(transformer))
   }
 }
