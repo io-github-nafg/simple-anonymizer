@@ -1,10 +1,11 @@
 package simpleanonymizer
 
+import scala.collection.mutable
+import scala.concurrent.{ExecutionContext, Future}
+
 import org.postgresql.util.PGobject
 import slick.jdbc.GetResult
 import slick.jdbc.meta.{MForeignKey, MTable}
-
-import scala.concurrent.{ExecutionContext, Future}
 
 /** Database snapshot and data operations for PostgreSQL using Slick. */
 object DbSnapshot {
@@ -15,26 +16,17 @@ object DbSnapshot {
   // Code snippet generation for error messages
   // ============================================================================
 
-  /** Generate a code snippet for a table transformer with passthrough for all columns.
-    *
-    * Used in error messages to help developers quickly add missing tables.
-    */
+  /** Generate a code snippet for a table transformer with passthrough for all columns. */
   def generateTableSnippet(tableName: String, columns: Seq[String]): String = {
     val columnBindings = columns.map(col => s""""$col" -> passthrough""").mkString(",\n    ")
     s""""$tableName" -> table(\n    $columnBindings\n  )"""
   }
 
-  /** Generate code snippets for missing column bindings.
-    *
-    * Used in error messages to help developers quickly add missing columns.
-    */
+  /** Generate code snippets for missing column bindings. */
   def generateColumnSnippets(columns: Set[String]): String =
     columns.toSeq.sorted.map(col => s""""$col" -> passthrough""").mkString(",\n    ")
 
-  /** List columns that need transformers (non-PK, non-FK columns).
-    *
-    * Useful for identifying which columns in a table contain actual data that may need anonymization.
-    */
+  /** List columns that need transformers (non-PK, non-FK columns). */
   def getDataColumns(tableName: String, schema: String = "public")(implicit ec: ExecutionContext): DBIO[Seq[String]] =
     for {
       columns   <- getTableColumns(tableName, schema)
@@ -85,11 +77,7 @@ object DbSnapshot {
   def getTableColumns(tableName: String, schema: String = "public")(implicit ec: ExecutionContext): DBIO[Seq[String]] =
     withTable(tableName, schema, Seq.empty[String])(_.getColumns.map(_.map(_.name)))
 
-  /** Validate that a transformer covers all required columns (excludes PK and FK columns).
-    *
-    * @return
-    *   Left(missing columns) if validation fails, Right(()) if successful
-    */
+  /** Validate that a transformer covers all required columns (excludes PK and FK columns). */
   def validateTransformerCoverage(
       tableName: String,
       transformer: RowTransformer.TableTransformer,
@@ -105,38 +93,148 @@ object DbSnapshot {
     }
 
   // ============================================================================
-  // Dependency graph
+  // Dependency graph (inlined from DependencyGraph)
   // ============================================================================
 
-  def computeTableLevels(tables: Seq[String], fks: Seq[MForeignKey]): Map[String, Int] =
-    DependencyGraph.computeTableLevels(tables, fks)
+  /** Compute insertion levels for tables based on FK dependencies. Level 0 = tables with no FK dependencies (can be inserted first) Level N = tables that
+    * depend only on tables at level < N
+    */
+  def computeTableLevels(tables: Seq[String], fks: Seq[MForeignKey]): Map[String, Int] = {
+    // Build dependency map: table -> set of tables it depends on (parents)
+    val dependencies: Map[String, Set[String]] = {
+      val deps = mutable.Map[String, mutable.Set[String]]()
+      for (table <- tables)
+        deps(table) = mutable.Set.empty
+      for (fk    <- fks if fk.fkTable.name != fk.pkTable.name) // Ignore self-references
+        deps.get(fk.fkTable.name).foreach(_ += fk.pkTable.name)
+      deps.view.mapValues(_.toSet).toMap
+    }
 
-  def groupTablesByLevel(tableLevels: Map[String, Int]): Seq[Seq[String]] =
-    DependencyGraph.groupTablesByLevel(tableLevels)
+    val levels  = mutable.Map[String, Int]()
+    var changed = true
+
+    // Initialize: tables with no dependencies are level 0
+    for (table <- tables if dependencies(table).isEmpty)
+      levels(table) = 0
+
+    // Iterate until stable
+    while (changed) {
+      changed = false
+      for (table <- tables if !levels.contains(table)) {
+        val deps = dependencies(table)
+        if (deps.forall(levels.contains)) {
+          levels(table) = deps.map(levels).max + 1
+          changed = true
+        }
+      }
+    }
+
+    // Check for cycles (tables not assigned a level)
+    val unassigned = tables.filterNot(levels.contains)
+    if (unassigned.nonEmpty)
+      println(s"[DependencyGraph] WARNING: Circular dependencies detected for tables: ${unassigned.mkString(", ")}")
+
+    levels.toMap
+  }
+
+  /** Group tables by their level */
+  def groupTablesByLevel(tableLevels: Map[String, Int]): Seq[Seq[String]] = {
+    if (tableLevels.isEmpty) return Seq.empty
+    val maxLevel = tableLevels.values.max
+    (0 to maxLevel).map { level =>
+      tableLevels.collect { case (table, l) if l == level => table }.toSeq.sorted
+    }
+  }
 
   // ============================================================================
-  // Filter propagation
+  // Filter propagation (inlined from FilterPropagation)
   // ============================================================================
 
-  type TableConfig = FilterPropagation.TableConfig
-  val TableConfig = FilterPropagation.TableConfig
+  /** Configuration for subsetting a table. */
+  case class TableConfig(whereClause: Option[String] = None, skip: Boolean = false, copyAll: Boolean = false)
 
-  type TableSpec = FilterPropagation.TableSpec
-  val TableSpec = FilterPropagation.TableSpec
+  /** Specification for how to handle a table during snapshot copy. */
+  sealed trait TableSpec {
+    def transformer: Option[RowTransformer.TableTransformer]
+    def config: TableConfig
+  }
+  object TableSpec       {
 
+    /** Skip this table entirely */
+    case object Skip extends TableSpec {
+      def transformer: Option[RowTransformer.TableTransformer] = None
+      def config: TableConfig                                  = TableConfig(skip = true)
+    }
+
+    /** Copy with the given transformer */
+    case class Copy(
+        t: RowTransformer.TableTransformer,
+        whereClause: Option[String] = None,
+        copyAll: Boolean = false
+    ) extends TableSpec {
+      def transformer: Option[RowTransformer.TableTransformer] = Some(t)
+      def config: TableConfig                                  = TableConfig(whereClause = whereClause, copyAll = copyAll)
+    }
+
+    /** Skip this table entirely */
+    def skip: TableSpec = Skip
+
+    /** Copy with the given transformer */
+    def copy(transformer: RowTransformer.TableTransformer): TableSpec = Copy(transformer)
+
+    /** Copy with the given transformer and where clause filter */
+    def copy(transformer: RowTransformer.TableTransformer, whereClause: String): TableSpec =
+      Copy(transformer, whereClause = Some(whereClause))
+
+    /** Copy all rows (ignore FK propagation filters) */
+    def copyAll(transformer: RowTransformer.TableTransformer): TableSpec = Copy(transformer, copyAll = true)
+  }
+
+  /** Generate a WHERE clause for a child table based on the parent table's filter. */
   def generateChildWhereClause(
       childTable: String,
       parentFilters: Map[String, String],
       fks: Seq[MForeignKey]
-  ): Option[String] =
-    FilterPropagation.generateChildWhereClause(childTable, parentFilters, fks)
+  ): Option[String] = {
+    val relevantFks = fks.filter(_.fkTable.name == childTable)
+    val conditions  = relevantFks.flatMap { fk =>
+      parentFilters.get(fk.pkTable.name).map { parentWhere =>
+        s"${fk.fkColumn} IN (SELECT ${fk.pkColumn} FROM ${fk.pkTable.name} WHERE $parentWhere)"
+      }
+    }
+    if (conditions.isEmpty) None
+    else Some(conditions.mkString(" AND "))
+  }
 
+  /** Compute effective WHERE clauses for all tables based on root filters and FK relationships. */
   def computeEffectiveFilters(
       tables: Seq[String],
       fks: Seq[MForeignKey],
       tableConfigs: Map[String, TableConfig]
-  ): Map[String, Option[String]] =
-    FilterPropagation.computeEffectiveFilters(tables, fks, tableConfigs)
+  ): Map[String, Option[String]] = {
+    val effectiveFilters = mutable.Map[String, Option[String]]()
+    val fksByChild       = fks.groupBy(_.fkTable.name)
+
+    for (table <- tables) {
+      val config = tableConfigs.getOrElse(table, TableConfig())
+
+      if (config.skip)
+        effectiveFilters(table) = None
+      else if (config.copyAll)
+        effectiveFilters(table) = None
+      else if (config.whereClause.isDefined)
+        effectiveFilters(table) = config.whereClause
+      else {
+        val parentFilters = effectiveFilters.collect {
+          case (t, Some(filter)) if fksByChild.getOrElse(table, Nil).exists(_.pkTable.name == t) => t -> filter
+        }.toMap
+
+        effectiveFilters(table) = generateChildWhereClause(table, parentFilters, fks)
+      }
+    }
+
+    effectiveFilters.toMap
+  }
 
   // ============================================================================
   // Data copy
@@ -187,7 +285,6 @@ object DbSnapshot {
     val columnList   = columns.map(quoteIdentifier).mkString(", ")
     val placeholders = columns.map(_ => "?").mkString(", ")
 
-    // Add ORDER BY id DESC when using LIMIT for deterministic results (if the table has id column)
     val orderBy = limit.filter(_ => columns.contains("id")).map(_ => s" ORDER BY ${quoteIdentifier("id")} DESC").getOrElse("")
 
     val selectSql =
@@ -201,7 +298,6 @@ object DbSnapshot {
     println(s"[DbSnapshot] SELECT: $selectSql")
     transformer.foreach(t => println(s"[DbSnapshot] Transforming columns: ${t.columnNames.mkString(", ")}"))
 
-    // GetResult for dynamic columns - returns both raw objects and string representations
     implicit val getRowResult: GetResult[RawRow] = GetResult { r =>
       val objectsAndStrings = columns.map { col =>
         val obj = r.nextObject()
@@ -214,11 +310,9 @@ object DbSnapshot {
       )
     }
 
-    // First get column types from the source database
     val columnTypesAction = getColumnTypes(tableName, columns)
 
     sourceDb.run(columnTypesAction).flatMap { columnTypes =>
-      // Read all rows from source (streaming in batches)
       val selectAction = sql"#$selectSql".as[RawRow]
 
       sourceDb.run(selectAction).flatMap { rows =>
@@ -226,20 +320,17 @@ object DbSnapshot {
           println(s"[DbSnapshot] No rows to copy from $tableName")
           Future.successful(0)
         } else {
-          // Transform and insert in batches
           val batchSize = 1000
           val batches   = rows.grouped(batchSize).toList
 
-          // Build a map of column name -> ColumnSpec for quick lookup
-          val columnSpecs: Map[String, RowTransformer.ColumnSpec] =
-            transformer.map(_.columns.map(spec => spec.columnName -> spec).toMap).getOrElse(Map.empty)
+          // Build a map of column name -> ColumnPlan for quick lookup
+          val columnPlans: Map[String, RowTransformer.ColumnPlan] =
+            transformer.map(_.columns.map(plan => plan.columnName -> plan).toMap).getOrElse(Map.empty)
 
-          // Process batches sequentially
           def processBatches(remaining: List[Seq[RawRow]], count: Int): Future[Int] =
             remaining match {
               case Nil           => Future.successful(count)
               case batch :: rest =>
-                // Use SimpleDBIO for batch inserts with PreparedStatement
                 val batchInsertAction = SimpleDBIO[Int] { ctx =>
                   val conn       = ctx.connection
                   val stmt       = conn.prepareStatement(insertSql)
@@ -250,35 +341,40 @@ object DbSnapshot {
                       val column     = columns(idx)
                       val columnType = columnTypes(idx)
 
-                      val value: AnyRef = columnSpecs.get(column) match {
-                        case Some(spec) =>
-                          // Use resultKind to determine how to get the value
-                          spec.resultKind match {
-                            case RowTransformer.ResultKind.UseOriginal =>
-                              // Passthrough - preserve original type
+                      val value: AnyRef = columnPlans.get(column) match {
+                        case Some(plan) =>
+                          plan match {
+                            case _: RowTransformer.ColumnPlan.Passthrough =>
                               val rawObj = rawRow.objects.getOrElse(column, null)
                               if (rawObj == null) null
                               else if (isJsonType(columnType)) wrapJsonValue(rawObj.toString, columnType)
                               else rawObj
 
-                            case RowTransformer.ResultKind.SetNull =>
+                            case _: RowTransformer.ColumnPlan.SetNull =>
                               null
 
-                            case RowTransformer.ResultKind.UseFixed(v) =>
+                            case fixed: RowTransformer.ColumnPlan.Fixed =>
+                              val v = fixed.value
                               if (v == null) null
                               else if (isJsonType(columnType)) wrapJsonValue(v.toString, columnType)
                               else v.asInstanceOf[AnyRef]
 
-                            case RowTransformer.ResultKind.TransformString(f) =>
+                            case transform: RowTransformer.ColumnPlan.Transform =>
                               val str         = rawRow.strings.getOrElse(column, "")
-                              val transformed = f(str)
+                              val transformed = transform.f(str)
                               if (isJsonType(columnType)) wrapJsonValue(transformed, columnType)
                               else transformed
 
-                            case RowTransformer.ResultKind.TransformJson(nav, f) =>
-                              // For JSON columns with navigation, apply the transformation
+                            case jsonTransform: RowTransformer.ColumnPlan.TransformJson =>
                               val str         = rawRow.strings.getOrElse(column, "")
-                              val transformed = nav.wrap(RowTransformer.ValueTransformer.Simple(f))(str)
+                              val transformed = jsonTransform.nav.wrap(jsonTransform.f)(str)
+                              if (isJsonType(columnType)) wrapJsonValue(transformed, columnType)
+                              else transformed
+
+                            case dep: RowTransformer.ColumnPlan.Dependent =>
+                              val str         = rawRow.strings.getOrElse(column, "")
+                              val f           = dep.f(rawRow.strings)
+                              val transformed = f(str)
                               if (isJsonType(columnType)) wrapJsonValue(transformed, columnType)
                               else transformed
                           }

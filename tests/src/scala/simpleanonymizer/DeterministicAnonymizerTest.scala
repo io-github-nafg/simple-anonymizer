@@ -43,30 +43,6 @@ class DeterministicAnonymizerTest extends AnyFunSuite with TypeCheckedTripleEqua
   }
 
   // ============================================================================
-  // Core anonymizer behavior (test one representative from each category)
-  // ============================================================================
-
-  test("Passthrough returns input unchanged") {
-    assert(Passthrough.anonymize("hello") === "hello")
-    assert(Passthrough.anonymize("") === "")
-    assert(Passthrough.anonymize(null) === null)
-  }
-
-  test("Null anonymizer returns null for any input") {
-    assert(Null.anonymize("hello") === null)
-    assert(Null.anonymize("") === null)
-    assert(Null.anonymize(null) === null)
-  }
-
-  test("Fixed returns the fixed value regardless of input") {
-    val fixed = Fixed("REDACTED")
-    assert(fixed.anonymize("hello") === "REDACTED")
-    assert(fixed.anonymize("world") === "REDACTED")
-    assert(fixed.anonymize(null) === "REDACTED")
-    assert(fixed.anonymize("") === "REDACTED")
-  }
-
-  // ============================================================================
   // Name anonymizers - determinism and null/empty handling
   // ============================================================================
 
@@ -93,12 +69,8 @@ class DeterministicAnonymizerTest extends AnyFunSuite with TypeCheckedTripleEqua
   }
 
   test("FullName uses different hashes for first and last name") {
-    // The same input should produce different first/last names
-    // because the implementation uses different salt for each
     val result = FullName.anonymize("TestName")
     val parts  = result.split(" ")
-    // We can't guarantee they're different (hash collision possible)
-    // but we can verify they're both real names
     assert(parts(0).nonEmpty)
     assert(parts(1).nonEmpty)
   }
@@ -137,7 +109,6 @@ class DeterministicAnonymizerTest extends AnyFunSuite with TypeCheckedTripleEqua
     val result = StreetAddress.anonymize("123 Main St")
     val parts  = result.split(" ")
     assert(parts.length >= 3, s"Expected at least 3 parts in '$result'")
-    // First part should be a number
     assert(parts(0).forall(_.isDigit), s"Expected first part to be number: ${parts(0)}")
   }
 

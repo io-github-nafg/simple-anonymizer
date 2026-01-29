@@ -18,53 +18,44 @@ object RowTransformer {
   type Row = Map[String, String]
 
   // ============================================================================
-  // Result Kind - describes what kind of value a transformer produces
+  // Column Plan - single ADT for column transformation
   // ============================================================================
 
-  /** Describes what kind of result a column transformation produces.
-    *
-    * This enables DbSnapshot to handle different transformation types appropriately:
-    *   - UseOriginal: preserve the original database value and type
-    *   - SetNull: insert null
-    *   - UseFixed: insert a fixed value
-    *   - TransformString: apply a String => String function
-    */
-  sealed trait ResultKind
-  object ResultKind {
-    case object UseOriginal                                     extends ResultKind
-    case object SetNull                                         extends ResultKind
-    case class UseFixed(value: Any)                             extends ResultKind
-    case class TransformString(f: String => String)             extends ResultKind
-    case class TransformJson(nav: JsonNav, f: String => String) extends ResultKind
+  /** Describes how to transform a column. This is the core internal representation used by DbSnapshot. */
+  sealed trait ColumnPlan {
+    def columnName: String
+    def dependsOn: Set[String]
   }
+  object ColumnPlan       {
 
-  // ============================================================================
-  // Value Transformers
-  // ============================================================================
-
-  sealed trait ValueTransformer {
-    def apply(input: String): String
-    def resultKind: ResultKind
-  }
-  object ValueTransformer       {
-    case object PassThrough extends ValueTransformer {
-      def apply(input: String): String = input
-      def resultKind: ResultKind       = ResultKind.UseOriginal
+    /** Passthrough - preserve original database value and type */
+    case class Passthrough(columnName: String) extends ColumnPlan {
+      def dependsOn: Set[String] = Set.empty
     }
 
-    case object SetNull extends ValueTransformer {
-      def apply(input: String): String = null
-      def resultKind: ResultKind       = ResultKind.SetNull
+    /** Set to null */
+    case class SetNull(columnName: String) extends ColumnPlan {
+      def dependsOn: Set[String] = Set.empty
     }
 
-    case class Fixed(value: Any) extends ValueTransformer {
-      def apply(input: String): String = if (value == null) null else value.toString
-      def resultKind: ResultKind       = ResultKind.UseFixed(value)
+    /** Fixed value of any type */
+    case class Fixed(columnName: String, value: Any) extends ColumnPlan {
+      def dependsOn: Set[String] = Set.empty
     }
 
-    case class Simple(f: String => String) extends ValueTransformer {
-      def apply(input: String): String = f(input)
-      def resultKind: ResultKind       = ResultKind.TransformString(f)
+    /** String transformation */
+    case class Transform(columnName: String, f: String => String) extends ColumnPlan {
+      def dependsOn: Set[String] = Set.empty
+    }
+
+    /** JSON transformation with navigation */
+    case class TransformJson(columnName: String, nav: JsonNav, f: String => String) extends ColumnPlan {
+      def dependsOn: Set[String] = Set.empty
+    }
+
+    /** Dependent transformation - needs other column values */
+    case class Dependent(columnName: String, deps: Set[String], f: Row => String => String) extends ColumnPlan {
+      def dependsOn: Set[String] = deps
     }
   }
 
@@ -72,50 +63,48 @@ object RowTransformer {
   // JSON Navigation
   // ============================================================================
 
-  /** JsonNav works on JSON values internally to avoid repeated parse/encode cycles. Only the outermost layer converts to/from String.
-    */
+  /** JsonNav works on JSON values internally to avoid repeated parse/encode cycles. */
   sealed trait JsonNav {
 
-    /** Transform a Json value, applying inner transformer to leaf string values */
-    def transformJson(json: Json, inner: ValueTransformer): Json
+    /** Transform a Json value, applying f to leaf string values */
+    def transformJson(json: Json, f: String => String): Json
 
-    /** Wrap a ValueTransformer to work on JSON strings */
-    def wrap(inner: ValueTransformer): ValueTransformer =
-      ValueTransformer.Simple { jsonStr =>
-        val json        = parse(jsonStr).getOrElse(Json.Null)
-        val transformed = transformJson(json, inner)
-        transformed.noSpaces
-      }
+    /** Wrap a String => String function to work on JSON strings */
+    def wrap(f: String => String): String => String = { jsonStr =>
+      val json        = parse(jsonStr).getOrElse(Json.Null)
+      val transformed = transformJson(json, f)
+      transformed.noSpaces
+    }
   }
   object JsonNav {
 
     case object Direct extends JsonNav {
-      def transformJson(json: Json, inner: ValueTransformer): Json = {
+      def transformJson(json: Json, f: String => String): Json = {
         val str         = json.asString.getOrElse("")
-        val transformed = inner(str)
+        val transformed = f(str)
         Json.fromString(transformed)
       }
 
       // Override wrap for Direct to avoid an unnecessary JSON round-trip
-      override def wrap(inner: ValueTransformer): ValueTransformer = inner
+      override def wrap(f: String => String): String => String = f
     }
 
     case class Field(fieldName: String) extends JsonNav {
-      def transformJson(json: Json, inner: ValueTransformer): Json =
+      def transformJson(json: Json, f: String => String): Json =
         json.asObject match {
           case Some(obj) =>
             val oldValue = obj(fieldName).flatMap(_.asString).getOrElse("")
-            val newValue = inner(oldValue)
+            val newValue = f(oldValue)
             obj.add(fieldName, Json.fromString(newValue)).asJson
           case None      => json
         }
     }
 
     case class ArrayOf(elementNav: JsonNav) extends JsonNav {
-      def transformJson(json: Json, inner: ValueTransformer): Json =
+      def transformJson(json: Json, f: String => String): Json =
         json.asArray match {
           case Some(arr) =>
-            val transformed = arr.map(elem => elementNav.transformJson(elem, inner))
+            val transformed = arr.map(elem => elementNav.transformJson(elem, f))
             Json.fromValues(transformed)
           case None      => json
         }
@@ -123,71 +112,25 @@ object RowTransformer {
   }
 
   // ============================================================================
-  // Column Specification
-  // ============================================================================
-
-  sealed trait ColumnSpec {
-    def columnName: String
-    def dependsOn: Set[String]
-    def transform(row: Row): String
-    def resultKind: ResultKind
-  }
-  object ColumnSpec       {
-    case class Independent(columnName: String, nav: JsonNav, transformer: ValueTransformer) extends ColumnSpec {
-      def dependsOn: Set[String]      = Set.empty
-      def transform(row: Row): String = {
-        val originalValue = row.getOrElse(columnName, "")
-        nav.wrap(transformer)(originalValue)
-      }
-      def resultKind: ResultKind      = nav match {
-        case JsonNav.Direct => transformer.resultKind
-        case _              =>
-          // For JSON navigation, we always transform strings
-          ResultKind.TransformJson(nav, transformer.apply)
-      }
-    }
-
-    case class Dependent(columnName: String, dependencies: Set[String], nav: JsonNav, transformerFactory: Row => ValueTransformer) extends ColumnSpec {
-      def dependsOn: Set[String]      = dependencies
-      def transform(row: Row): String = {
-        val originalValue = row.getOrElse(columnName, "")
-        val transformer   = transformerFactory(row)
-        nav.wrap(transformer)(originalValue)
-      }
-      // Dependent columns always do string transformation since the transformer is computed at runtime
-      def resultKind: ResultKind      = ResultKind.TransformString(identity)
-    }
-
-    /** Passthrough column - preserves original database type */
-    case class Passthrough(columnName: String) extends ColumnSpec {
-      def dependsOn: Set[String]      = Set.empty
-      def transform(row: Row): String = row.getOrElse(columnName, "")
-      def resultKind: ResultKind      = ResultKind.UseOriginal
-    }
-
-    /** Null column - always inserts null */
-    case class Null(columnName: String) extends ColumnSpec {
-      def dependsOn: Set[String]      = Set.empty
-      def transform(row: Row): String = null
-      def resultKind: ResultKind      = ResultKind.SetNull
-    }
-
-    /** Fixed value column */
-    case class FixedValue(columnName: String, value: Any) extends ColumnSpec {
-      def dependsOn: Set[String]      = Set.empty
-      def transform(row: Row): String = if (value == null) null else value.toString
-      def resultKind: ResultKind      = ResultKind.UseFixed(value)
-    }
-  }
-
-  // ============================================================================
   // Table Transformer
   // ============================================================================
 
-  case class TableTransformer(columns: Seq[ColumnSpec]) {
+  case class TableTransformer(columns: Seq[ColumnPlan]) {
     private val outputColumns: Set[String] = columns.map(_.columnName).toSet
 
-    def transform(row: Row): Row = columns.map(spec => spec.columnName -> spec.transform(row)).toMap
+    /** Transform a row using the column plans. Useful for testing. */
+    def transform(row: Row): Row =
+      columns.map { plan =>
+        val result = plan match {
+          case _: ColumnPlan.Passthrough   => row.getOrElse(plan.columnName, "")
+          case _: ColumnPlan.SetNull       => null
+          case fixed: ColumnPlan.Fixed     => if (fixed.value == null) null else fixed.value.toString
+          case t: ColumnPlan.Transform     => t.f(row.getOrElse(plan.columnName, ""))
+          case j: ColumnPlan.TransformJson => j.nav.wrap(j.f)(row.getOrElse(plan.columnName, ""))
+          case d: ColumnPlan.Dependent     => d.f(row)(row.getOrElse(plan.columnName, ""))
+        }
+        plan.columnName -> result
+      }.toMap
 
     def validateCovers(expectedColumns: Set[String]): Either[Set[String], Unit] = {
       val missing = expectedColumns -- outputColumns
@@ -203,41 +146,38 @@ object RowTransformer {
   // ============================================================================
 
   sealed trait UnboundTransformer {
-    def bindTo(columnName: String): ColumnSpec
+    def bindTo(columnName: String): ColumnPlan
   }
   object UnboundTransformer       {
 
-    import JsonNav.Direct
-
     /** Passthrough - preserves original database type */
     case object Passthrough extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnSpec = ColumnSpec.Passthrough(columnName)
+      def bindTo(columnName: String): ColumnPlan = ColumnPlan.Passthrough(columnName)
     }
 
     /** Null - always inserts null */
     case object SetNull extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnSpec = ColumnSpec.Null(columnName)
+      def bindTo(columnName: String): ColumnPlan = ColumnPlan.SetNull(columnName)
     }
 
     /** Fixed value - inserts a constant value of any type */
     case class Fixed(value: Any) extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnSpec = ColumnSpec.FixedValue(columnName, value)
+      def bindTo(columnName: String): ColumnPlan = ColumnPlan.Fixed(columnName, value)
     }
 
     /** Simple string transformation */
     case class Simple(f: String => String) extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnSpec = ColumnSpec.Independent(columnName, Direct, ValueTransformer.Simple(f))
+      def bindTo(columnName: String): ColumnPlan = ColumnPlan.Transform(columnName, f)
     }
 
     /** JSON navigation with string transformation */
     case class WithJson(nav: JsonNav, f: String => String) extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnSpec = ColumnSpec.Independent(columnName, nav, ValueTransformer.Simple(f))
+      def bindTo(columnName: String): ColumnPlan = ColumnPlan.TransformJson(columnName, nav, f)
     }
 
     /** Dependent transformation (depends on other column values) */
     case class Dependent(deps: Set[String], f: Row => String => String) extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnSpec =
-        ColumnSpec.Dependent(columnName, deps, Direct, row => ValueTransformer.Simple(f(row)))
+      def bindTo(columnName: String): ColumnPlan = ColumnPlan.Dependent(columnName, deps, f)
     }
   }
 

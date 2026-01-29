@@ -35,7 +35,6 @@ class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.D
     ec: ExecutionContext
 ) {
   import DbSnapshot._
-  import FilterPropagation.TableSpec
   import SlickProfile.api.DBIO
 
   /** Copy all tables from source to target with transformation (preferred API).

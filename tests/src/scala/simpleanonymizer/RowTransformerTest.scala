@@ -8,53 +8,33 @@ class RowTransformerTest extends AnyFunSuite with TypeCheckedTripleEquals {
   import RowTransformer.DSL._
 
   // ============================================================================
-  // ValueTransformer tests
-  // ============================================================================
-
-  test("PassThrough ValueTransformer returns input unchanged") {
-    val vt = ValueTransformer.PassThrough
-    assert(vt("hello") === "hello")
-    assert(vt("") === "")
-  }
-
-  test("Simple ValueTransformer applies function") {
-    val vt = ValueTransformer.Simple(_.toUpperCase)
-    assert(vt("hello") === "HELLO")
-  }
-
-  // ============================================================================
   // JsonNav tests
   // ============================================================================
 
   test("JsonNav.Field transforms a specific field in JSON object") {
     val nav     = JsonNav.Field("name")
-    val vt      = ValueTransformer.Simple(_.toUpperCase)
-    val wrapped = nav.wrap(vt)
+    val wrapped = nav.wrap(_.toUpperCase)
     val result  = wrapped("""{"name":"john","age":30}""")
     assert(result === """{"name":"JOHN","age":30}""")
   }
 
   test("JsonNav.Field leaves other fields unchanged") {
     val nav     = JsonNav.Field("name")
-    val vt      = ValueTransformer.Simple(_ => "REPLACED")
-    val wrapped = nav.wrap(vt)
+    val wrapped = nav.wrap(_ => "REPLACED")
     val result  = wrapped("""{"name":"john","city":"NYC"}""")
     assert(result === """{"name":"REPLACED","city":"NYC"}""")
   }
 
   test("JsonNav.ArrayOf transforms each element in array") {
     val nav     = JsonNav.ArrayOf(JsonNav.Direct)
-    val vt      = ValueTransformer.Simple(_.toUpperCase)
-    val wrapped = nav.wrap(vt)
-    // ArrayOf with Direct expects array of strings
+    val wrapped = nav.wrap(_.toUpperCase)
     val result  = wrapped("""["a","b","c"]""")
     assert(result === """["A","B","C"]""")
   }
 
   test("JsonNav.ArrayOf with Field transforms nested field in each element") {
     val nav     = JsonNav.ArrayOf(JsonNav.Field("number"))
-    val vt      = ValueTransformer.Simple(_ => "XXX")
-    val wrapped = nav.wrap(vt)
+    val wrapped = nav.wrap(_ => "XXX")
     val input   = """[{"type":"home","number":"123"},{"type":"work","number":"456"}]"""
     val result  = wrapped(input)
     assert(result === """[{"type":"home","number":"XXX"},{"type":"work","number":"XXX"}]""")
@@ -201,48 +181,47 @@ class RowTransformerTest extends AnyFunSuite with TypeCheckedTripleEquals {
     val femaleResult = transformer.transform(femaleRow)
 
     // Results should be different because different name lists are used
-    // (though could collide by chance)
     assert(maleResult("first_name").nonEmpty)
     assert(femaleResult("first_name").nonEmpty)
   }
 
   // ============================================================================
-  // ResultKind tests - for type-aware transformations
+  // ColumnPlan type tests
   // ============================================================================
 
-  test("passthrough has UseOriginal resultKind") {
-    val spec = passthrough.bindTo("col")
-    assert(spec.resultKind === ResultKind.UseOriginal)
+  test("passthrough creates Passthrough ColumnPlan") {
+    val plan = passthrough.bindTo("col")
+    assert(plan.isInstanceOf[ColumnPlan.Passthrough])
   }
 
-  test("setNull has SetNull resultKind") {
-    val spec = setNull.bindTo("col")
-    assert(spec.resultKind === ResultKind.SetNull)
+  test("setNull creates SetNull ColumnPlan") {
+    val plan = setNull.bindTo("col")
+    assert(plan.isInstanceOf[ColumnPlan.SetNull])
   }
 
-  test("fixed has UseFixed resultKind with correct value") {
-    val spec = fixed(42).bindTo("col")
-    spec.resultKind match {
-      case ResultKind.UseFixed(v) => assert(v === 42)
-      case other                  => fail(s"Expected UseFixed, got $other")
+  test("fixed creates Fixed ColumnPlan with correct value") {
+    val plan = fixed(42).bindTo("col")
+    plan match {
+      case ColumnPlan.Fixed(_, v) => assert(v === 42)
+      case other                  => fail(s"Expected Fixed, got $other")
     }
   }
 
-  test("using has TransformString resultKind") {
-    val spec = using(_.toUpperCase).bindTo("col")
-    spec.resultKind match {
-      case ResultKind.TransformString(f) => assert(f("hello") === "HELLO")
-      case other                         => fail(s"Expected TransformString, got $other")
+  test("using creates Transform ColumnPlan") {
+    val plan = using(_.toUpperCase).bindTo("col")
+    plan match {
+      case ColumnPlan.Transform(_, f) => assert(f("hello") === "HELLO")
+      case other                      => fail(s"Expected Transform, got $other")
     }
   }
 
-  test("jsonArray has TransformJson resultKind") {
-    val spec = jsonArray("number")(_ => "XXX").bindTo("phones")
-    spec.resultKind match {
-      case ResultKind.TransformJson(nav, f) =>
+  test("jsonArray creates TransformJson ColumnPlan") {
+    val plan = jsonArray("number")(_ => "XXX").bindTo("phones")
+    plan match {
+      case ColumnPlan.TransformJson(_, nav, f) =>
         assert(nav.isInstanceOf[JsonNav.ArrayOf])
         assert(f("123") === "XXX")
-      case other                            => fail(s"Expected TransformJson, got $other")
+      case other                               => fail(s"Expected TransformJson, got $other")
     }
   }
 
