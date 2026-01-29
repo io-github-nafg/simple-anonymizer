@@ -24,39 +24,23 @@ object RowTransformer {
   /** Describes how to transform a column. This is the core internal representation used by DbSnapshot. */
   sealed trait ColumnPlan {
     def columnName: String
-    def dependsOn: Set[String]
   }
   object ColumnPlan       {
 
     /** Passthrough - preserve the original database value and type */
-    case class Passthrough(columnName: String) extends ColumnPlan {
-      def dependsOn: Set[String] = Set.empty
-    }
+    case class Passthrough(columnName: String) extends ColumnPlan
 
     /** Set to null */
-    case class SetNull(columnName: String) extends ColumnPlan {
-      def dependsOn: Set[String] = Set.empty
-    }
+    case class SetNull(columnName: String) extends ColumnPlan
 
     /** Fixed value of any type */
-    case class Fixed(columnName: String, value: Any) extends ColumnPlan {
-      def dependsOn: Set[String] = Set.empty
-    }
+    case class Fixed(columnName: String, value: Any) extends ColumnPlan
 
-    /** String transformation */
-    case class Transform(columnName: String, f: String => String) extends ColumnPlan {
-      def dependsOn: Set[String] = Set.empty
-    }
-
-    /** JSON transformation with navigation */
-    case class TransformJson(columnName: String, nav: JsonNav, f: String => String) extends ColumnPlan {
-      def dependsOn: Set[String] = Set.empty
-    }
+    /** String transformation with optional JSON navigation */
+    case class Transform(columnName: String, nav: JsonNav, f: String => String) extends ColumnPlan
 
     /** Dependent transformation - needs other column values */
-    case class Dependent(columnName: String, deps: Set[String], f: Row => String => String) extends ColumnPlan {
-      def dependsOn: Set[String] = deps
-    }
+    case class Dependent(columnName: String, f: Row => String => String) extends ColumnPlan
   }
 
   // ============================================================================
@@ -122,12 +106,11 @@ object RowTransformer {
     def transform(row: Row): Row =
       columns.map { plan =>
         val result = plan match {
-          case _: ColumnPlan.Passthrough   => row.getOrElse(plan.columnName, "")
-          case _: ColumnPlan.SetNull       => null
-          case fixed: ColumnPlan.Fixed     => if (fixed.value == null) null else fixed.value.toString
-          case t: ColumnPlan.Transform     => t.f(row.getOrElse(plan.columnName, ""))
-          case j: ColumnPlan.TransformJson => j.nav.wrap(j.f)(row.getOrElse(plan.columnName, ""))
-          case d: ColumnPlan.Dependent     => d.f(row)(row.getOrElse(plan.columnName, ""))
+          case _: ColumnPlan.Passthrough => row.getOrElse(plan.columnName, "")
+          case _: ColumnPlan.SetNull     => null
+          case fixed: ColumnPlan.Fixed   => if (fixed.value == null) null else fixed.value.toString
+          case t: ColumnPlan.Transform   => t.nav.wrap(t.f)(row.getOrElse(plan.columnName, ""))
+          case d: ColumnPlan.Dependent   => d.f(row)(row.getOrElse(plan.columnName, ""))
         }
         plan.columnName -> result
       }.toMap
@@ -165,19 +148,14 @@ object RowTransformer {
       def bindTo(columnName: String): ColumnPlan = ColumnPlan.Fixed(columnName, value)
     }
 
-    /** Simple string transformation */
-    case class Simple(f: String => String) extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnPlan = ColumnPlan.Transform(columnName, f)
-    }
-
-    /** JSON navigation with string transformation */
-    case class WithJson(nav: JsonNav, f: String => String) extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnPlan = ColumnPlan.TransformJson(columnName, nav, f)
+    /** String transformation with optional JSON navigation */
+    case class Transform(nav: JsonNav, f: String => String) extends UnboundTransformer {
+      def bindTo(columnName: String): ColumnPlan = ColumnPlan.Transform(columnName, nav, f)
     }
 
     /** Dependent transformation (depends on other column values) */
-    case class Dependent(deps: Set[String], f: Row => String => String) extends UnboundTransformer {
-      def bindTo(columnName: String): ColumnPlan = ColumnPlan.Dependent(columnName, deps, f)
+    case class Dependent(f: Row => String => String) extends UnboundTransformer {
+      def bindTo(columnName: String): ColumnPlan = ColumnPlan.Dependent(columnName, f)
     }
   }
 
@@ -190,7 +168,7 @@ object RowTransformer {
 
     /** Transform with access to this column's value */
     def map(f: String => String => String): UnboundTransformer =
-      UnboundTransformer.Dependent(Set(name), row => f(row(name)))
+      UnboundTransformer.Dependent(row => f(row(name)))
 
     /** Combine with another column reference */
     def and(other: ColumnRef): ColumnRefs2 = ColumnRefs2(name, other.name)
@@ -198,14 +176,14 @@ object RowTransformer {
 
   case class ColumnRefs2(name1: String, name2: String) {
     def map(f: (String, String) => String => String): UnboundTransformer =
-      UnboundTransformer.Dependent(Set(name1, name2), row => f(row(name1), row(name2)))
+      UnboundTransformer.Dependent(row => f(row(name1), row(name2)))
 
     def and(other: ColumnRef): ColumnRefs3 = ColumnRefs3(name1, name2, other.name)
   }
 
   case class ColumnRefs3(name1: String, name2: String, name3: String) {
     def map(f: (String, String, String) => String => String): UnboundTransformer =
-      UnboundTransformer.Dependent(Set(name1, name2, name3), row => f(row(name1), row(name2), row(name3)))
+      UnboundTransformer.Dependent(row => f(row(name1), row(name2), row(name3)))
   }
 
   // ============================================================================
@@ -226,11 +204,11 @@ object RowTransformer {
     def fixed[A](value: A): UnboundTransformer = Fixed(value)
 
     /** Apply a String => String transformation */
-    def using(f: String => String): UnboundTransformer = Simple(f)
+    def using(f: String => String): UnboundTransformer = Transform(JsonNav.Direct, f)
 
     /** Transform a field within JSON arrays */
     def jsonArray(field: String)(f: String => String): UnboundTransformer =
-      WithJson(JsonNav.ArrayOf(JsonNav.Field(field)), f)
+      Transform(JsonNav.ArrayOf(JsonNav.Field(field)), f)
 
     /** Reference another column for dependent transformers */
     def col(name: String): ColumnRef = ColumnRef(name)

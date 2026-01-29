@@ -13,22 +13,13 @@ import scala.concurrent.{ExecutionContext, Future}
   *
   * val snapshot = new Snapshot(sourceDb, targetDb)
   *
-  * // Preferred API: single map with TableSpec
-  * for {
-  *   result <- snapshot.copy(Map(
-  *     "users"      -> copy(table("first_name" -> using(FirstName.anonymize), ...), whereClause = "active = true"),
-  *     "orders"     -> copy(table("description" -> passthrough, ...)),
-  *     "audit_logs" -> skip
-  *   ))
-  * } yield result  // Map[tableName -> rowCount]
-  *
-  * // Alternative API: separate tableConfigs and transformers maps
   * for {
   *   result <- snapshot.copy(
-  *     tableConfigs = Map("audit_logs" -> TableConfig(skip = true)),
-  *     transformers = Map("users" -> table(...), "orders" -> table(...))
+  *     "users"      -> copy(table("first_name" -> using(FirstName.anonymize), ...), "active = true"),
+  *     "orders"     -> copy(table("description" -> passthrough, ...)),
+  *     "audit_logs" -> skip
   *   )
-  * } yield result
+  * } yield result  // Map[tableName -> rowCount]
   *   }}}
   */
 class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.Database, schema: String = "public")(implicit
@@ -51,9 +42,8 @@ class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.D
     */
   def copy(tableSpecs: (String, TableSpec)*): Future[Map[String, Int]] = {
     val tableSpecsMap = tableSpecs.toMap
-    val tableConfigs  = tableSpecsMap.view.mapValues(_.config).toMap
     val transformers  = tableSpecsMap.collect { case (name, spec) if spec.transformer.isDefined => name -> spec.transformer.get }
-    val skippedTables = tableConfigs.collect { case (table, config) if config.skip => table }.toSet
+    val skippedTables = tableSpecsMap.collect { case (table, spec) if spec.skip => table }.toSet
 
     for {
       tables       <- sourceDb.run(getAllTables(schema))
@@ -61,7 +51,7 @@ class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.D
       tableLevels   = computeTableLevels(tables, fks)
       orderedGroups = groupTablesByLevel(tableLevels)
       orderedTables = orderedGroups.flatten
-      filters       = computeEffectiveFilters(orderedTables, fks, tableConfigs)
+      filters       = computeEffectiveFilters(orderedTables, fks, tableSpecsMap)
       // Validate that all non-skipped tables have transformers
       _            <- validateTableCoverage(tables, skippedTables, transformers)
       // Validate that each transformer covers all required columns
@@ -98,9 +88,9 @@ class Snapshot(sourceDb: SlickProfile.api.Database, targetDb: SlickProfile.api.D
             errorMsg.append(snippet)
             errorMsg.append(",\n\n")
           }
-          errorMsg.append("Or mark them as skipped in 'tableConfigs':\n")
+          errorMsg.append("Or mark them as skipped:\n")
           missingTables.foreach { t =>
-            errorMsg.append(s""""$t" -> TableConfig(skip = true),\n""")
+            errorMsg.append(s""""$t" -> TableSpec.skip,\n""")
           }
 
           Future.failed(new IllegalArgumentException(errorMsg.toString))

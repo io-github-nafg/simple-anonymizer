@@ -210,18 +210,20 @@ class RowTransformerTest extends AnyFunSuite with TypeCheckedTripleEquals {
   test("using creates Transform ColumnPlan") {
     val plan = using(_.toUpperCase).bindTo("col")
     plan match {
-      case ColumnPlan.Transform(_, f) => assert(f("hello") === "HELLO")
-      case other                      => fail(s"Expected Transform, got $other")
+      case ColumnPlan.Transform(_, nav, f) =>
+        assert(nav == JsonNav.Direct)
+        assert(f("hello") === "HELLO")
+      case other                           => fail(s"Expected Transform, got $other")
     }
   }
 
-  test("jsonArray creates TransformJson ColumnPlan") {
+  test("jsonArray creates Transform ColumnPlan with JSON navigation") {
     val plan = jsonArray("number")(_ => "XXX").bindTo("phones")
     plan match {
-      case ColumnPlan.TransformJson(_, nav, f) =>
+      case ColumnPlan.Transform(_, nav, f) =>
         assert(nav.isInstanceOf[JsonNav.ArrayOf])
         assert(f("123") === "XXX")
-      case other                               => fail(s"Expected TransformJson, got $other")
+      case other                           => fail(s"Expected Transform, got $other")
     }
   }
 

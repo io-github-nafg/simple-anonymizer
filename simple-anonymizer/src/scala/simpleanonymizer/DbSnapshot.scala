@@ -150,20 +150,19 @@ object DbSnapshot {
   // Filter propagation (inlined from FilterPropagation)
   // ============================================================================
 
-  /** Configuration for subsetting a table. */
-  case class TableConfig(whereClause: Option[String] = None, skip: Boolean = false)
-
   /** Specification for how to handle a table during snapshot copy. */
   sealed trait TableSpec {
     def transformer: Option[RowTransformer.TableTransformer]
-    def config: TableConfig
+    def whereClause: Option[String]
+    def skip: Boolean
   }
   object TableSpec       {
 
     /** Skip this table entirely */
     private case object Skip extends TableSpec {
       def transformer: Option[RowTransformer.TableTransformer] = None
-      def config: TableConfig                                  = TableConfig(skip = true)
+      def whereClause: Option[String]                          = None
+      def skip: Boolean                                        = true
     }
 
     /** Copy with the given transformer */
@@ -172,7 +171,7 @@ object DbSnapshot {
         whereClause: Option[String] = None
     ) extends TableSpec {
       def transformer: Option[RowTransformer.TableTransformer] = Some(t)
-      def config: TableConfig                                  = TableConfig(whereClause = whereClause)
+      def skip: Boolean                                        = false
     }
 
     /** Skip this table entirely */
@@ -206,26 +205,24 @@ object DbSnapshot {
   def computeEffectiveFilters(
       tables: Seq[String],
       fks: Seq[MForeignKey],
-      tableConfigs: Map[String, TableConfig]
+      tableSpecs: Map[String, TableSpec]
   ): Map[String, Option[String]] = {
     val effectiveFilters = mutable.Map[String, Option[String]]()
     val fksByChild       = fks.groupBy(_.fkTable.name)
 
-    for (table <- tables) {
-      val config = tableConfigs.getOrElse(table, TableConfig())
+    for (table <- tables)
+      tableSpecs.get(table) match {
+        case Some(spec) if spec.skip                  =>
+          effectiveFilters(table) = None
+        case Some(spec) if spec.whereClause.isDefined =>
+          effectiveFilters(table) = spec.whereClause
+        case _                                        =>
+          val parentFilters = effectiveFilters.collect {
+            case (t, Some(filter)) if fksByChild.getOrElse(table, Nil).exists(_.pkTable.name == t) => t -> filter
+          }.toMap
 
-      if (config.skip)
-        effectiveFilters(table) = None
-      else if (config.whereClause.isDefined)
-        effectiveFilters(table) = config.whereClause
-      else {
-        val parentFilters = effectiveFilters.collect {
-          case (t, Some(filter)) if fksByChild.getOrElse(table, Nil).exists(_.pkTable.name == t) => t -> filter
-        }.toMap
-
-        effectiveFilters(table) = generateChildWhereClause(table, parentFilters, fks)
+          effectiveFilters(table) = generateChildWhereClause(table, parentFilters, fks)
       }
-    }
 
     effectiveFilters.toMap
   }
@@ -247,6 +244,12 @@ object DbSnapshot {
   /** Check if a column type is JSON or JSONB */
   private def isJsonType(columnType: String): Boolean =
     columnType == "jsonb" || columnType == "json"
+
+  /** Wrap a value as a PGobject if the column type is JSON/JSONB, otherwise return as-is */
+  private def wrapIfJson(value: AnyRef, columnType: String): AnyRef =
+    if (value == null) null
+    else if (isJsonType(columnType)) wrapJsonValue(value.toString, columnType)
+    else value
 
   /** Get column types for a table using raw SQL */
   private def getColumnTypes(
@@ -317,9 +320,52 @@ object DbSnapshot {
           val batchSize = 1000
           val batches   = rows.grouped(batchSize).toList
 
-          // Build a map of column name -> ColumnPlan for a quick lookup
+          // Build a map of column name -> ColumnPlan for quick lookup
           val columnPlans: Map[String, RowTransformer.ColumnPlan] =
             transformer.map(_.columns.map(plan => plan.columnName -> plan).toMap).getOrElse(Map.empty)
+
+          // Precompute per-column writers to avoid pattern matching in the hot loop
+          val writers: Vector[RawRow => AnyRef] = columns.indices.map { idx =>
+            val column     = columns(idx)
+            val columnType = columnTypes(idx)
+
+            columnPlans.get(column) match {
+              case Some(plan) =>
+                plan match {
+                  case _: RowTransformer.ColumnPlan.Passthrough =>
+                    (rawRow: RawRow) => wrapIfJson(rawRow.objects.getOrElse(column, null), columnType)
+
+                  case _: RowTransformer.ColumnPlan.SetNull =>
+                    (_: RawRow) => null
+
+                  case fixed: RowTransformer.ColumnPlan.Fixed =>
+                    // Precompute the wrapped value since it's constant
+                    val wrappedValue = wrapIfJson(fixed.value.asInstanceOf[AnyRef], columnType)
+                    (_: RawRow) => wrappedValue
+
+                  case transform: RowTransformer.ColumnPlan.Transform =>
+                    // Precompute the wrapped transformation function
+                    val wrappedF = transform.nav.wrap(transform.f)
+                    (rawRow: RawRow) => {
+                      val str         = rawRow.strings.getOrElse(column, "")
+                      val transformed = wrappedF(str)
+                      wrapIfJson(transformed, columnType)
+                    }
+
+                  case dep: RowTransformer.ColumnPlan.Dependent =>
+                    (rawRow: RawRow) => {
+                      val str         = rawRow.strings.getOrElse(column, "")
+                      val f           = dep.f(rawRow.strings)
+                      val transformed = f(str)
+                      wrapIfJson(transformed, columnType)
+                    }
+                }
+
+              case None =>
+                // Column not in transformer - use original raw object
+                (rawRow: RawRow) => wrapIfJson(rawRow.objects.getOrElse(column, null), columnType)
+            }
+          }.toVector
 
           def processBatches(remaining: List[Seq[RawRow]], count: Int): Future[Int] =
             remaining match {
@@ -331,58 +377,8 @@ object DbSnapshot {
                   var batchCount = 0
 
                   for (rawRow <- batch) {
-                    for (idx <- columns.indices) {
-                      val column     = columns(idx)
-                      val columnType = columnTypes(idx)
-
-                      val value: AnyRef = columnPlans.get(column) match {
-                        case Some(plan) =>
-                          plan match {
-                            case _: RowTransformer.ColumnPlan.Passthrough =>
-                              val rawObj = rawRow.objects.getOrElse(column, null)
-                              if (rawObj == null) null
-                              else if (isJsonType(columnType)) wrapJsonValue(rawObj.toString, columnType)
-                              else rawObj
-
-                            case _: RowTransformer.ColumnPlan.SetNull =>
-                              null
-
-                            case fixed: RowTransformer.ColumnPlan.Fixed =>
-                              val v = fixed.value
-                              if (v == null) null
-                              else if (isJsonType(columnType)) wrapJsonValue(v.toString, columnType)
-                              else v.asInstanceOf[AnyRef]
-
-                            case transform: RowTransformer.ColumnPlan.Transform =>
-                              val str         = rawRow.strings.getOrElse(column, "")
-                              val transformed = transform.f(str)
-                              if (isJsonType(columnType)) wrapJsonValue(transformed, columnType)
-                              else transformed
-
-                            case jsonTransform: RowTransformer.ColumnPlan.TransformJson =>
-                              val str         = rawRow.strings.getOrElse(column, "")
-                              val transformed = jsonTransform.nav.wrap(jsonTransform.f)(str)
-                              if (isJsonType(columnType)) wrapJsonValue(transformed, columnType)
-                              else transformed
-
-                            case dep: RowTransformer.ColumnPlan.Dependent =>
-                              val str         = rawRow.strings.getOrElse(column, "")
-                              val f           = dep.f(rawRow.strings)
-                              val transformed = f(str)
-                              if (isJsonType(columnType)) wrapJsonValue(transformed, columnType)
-                              else transformed
-                          }
-
-                        case None =>
-                          // Column not in transformer - use original raw object
-                          val rawObj = rawRow.objects.getOrElse(column, null)
-                          if (rawObj == null) null
-                          else if (isJsonType(columnType)) wrapJsonValue(rawObj.toString, columnType)
-                          else rawObj
-                      }
-
-                      stmt.setObject(idx + 1, value)
-                    }
+                    for (idx <- columns.indices)
+                      stmt.setObject(idx + 1, writers(idx)(rawRow))
 
                     stmt.addBatch()
                     batchCount += 1

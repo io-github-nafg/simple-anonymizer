@@ -141,47 +141,39 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
   // ============================================================================
 
   test("computeEffectiveFilters uses explicit whereClause") {
+    import RowTransformer.DSL._
     val tables  = Seq("users")
     val fks     = Seq.empty[MForeignKey]
-    val configs = Map("users" -> TableConfig(whereClause = Some("active = true")))
-    val filters = computeEffectiveFilters(tables, fks, configs)
+    val specs   = Map("users" -> TableSpec.copy(table("name" -> passthrough), "active = true"))
+    val filters = computeEffectiveFilters(tables, fks, specs)
     assert(filters("users") === Some("active = true"))
   }
 
   test("computeEffectiveFilters returns None for skip") {
     val tables  = Seq("audit_log")
     val fks     = Seq.empty[MForeignKey]
-    val configs = Map(
-      "audit_log" -> TableConfig(skip = true)
+    val specs   = Map(
+      "audit_log" -> TableSpec.skip
     )
-    val filters = computeEffectiveFilters(tables, fks, configs)
+    val filters = computeEffectiveFilters(tables, fks, specs)
     assert(filters("audit_log") === None)
   }
 
   test("computeEffectiveFilters propagates filters through FK chain") {
+    import RowTransformer.DSL._
     val tables  = Seq("users", "orders", "order_items")
     val fks     = Seq(
       fk("orders", "user_id", "users", "id"),
       fk("order_items", "order_id", "orders", "id")
     )
-    val configs = Map("users" -> TableConfig(whereClause = Some("active = true")))
-    val filters = computeEffectiveFilters(tables, fks, configs)
+    val specs   = Map("users" -> TableSpec.copy(table("name" -> passthrough), "active = true"))
+    val filters = computeEffectiveFilters(tables, fks, specs)
 
     assert(filters("users") === Some("active = true"))
     assert(filters("orders") === Some("user_id IN (SELECT id FROM users WHERE active = true)"))
     // order_items gets filter propagated from orders
     assert(filters("order_items").isDefined)
     assert(filters("order_items").get.contains("order_id IN (SELECT id FROM orders WHERE"))
-  }
-
-  // ============================================================================
-  // TableConfig
-  // ============================================================================
-
-  test("TableConfig has sensible defaults") {
-    val config = TableConfig()
-    assert(config.whereClause === None)
-    assert(config.skip === false)
   }
 
   // ============================================================================
@@ -226,18 +218,19 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
   // TableSpec
   // ============================================================================
 
-  test("TableSpec.skip has correct config") {
+  test("TableSpec.skip has correct properties") {
     val spec = TableSpec.skip
-    assert(spec.config.skip === true)
+    assert(spec.skip === true)
+    assert(spec.whereClause === None)
     assert(spec.transformer === None)
   }
 
-  test("TableSpec.copy has transformer and default config") {
+  test("TableSpec.copy has transformer and default properties") {
     import RowTransformer.DSL._
     val transformer = table("name" -> passthrough)
     val spec        = TableSpec.copy(transformer)
-    assert(spec.config.skip === false)
-    assert(spec.config.whereClause === None)
+    assert(spec.skip === false)
+    assert(spec.whereClause === None)
     assert(spec.transformer === Some(transformer))
   }
 
@@ -245,7 +238,7 @@ class DbSnapshotTest extends AnyFunSuite with TypeCheckedTripleEquals {
     import RowTransformer.DSL._
     val transformer = table("name" -> passthrough)
     val spec        = TableSpec.copy(transformer, "active = true")
-    assert(spec.config.whereClause === Some("active = true"))
+    assert(spec.whereClause === Some("active = true"))
     assert(spec.transformer === Some(transformer))
   }
 }
