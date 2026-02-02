@@ -1,0 +1,25 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+  customManagers: [
+    {
+      customType: "jsonata",
+      fileFormat: "yaml",
+      fileMatch: "bleep.yaml",
+      matchStrings: [
+        '{"currentValue": $."$version"}'
+      ],
+      datasourceTemplate: "maven",
+      depNameTemplate: "build.bleep:bleep-core_3"
+    },
+    {
+      customType: "jsonata",
+      fileFormat: "yaml",
+      fileMatch: "bleep.yaml",
+      matchStrings: [
+        'projects.*.dependencies.(module ? module : $).[$match($, /(.*):([^:]*)/)].{"depName": $replace(groups[0], /::(.*)/, ":$1_2.13"), "currentValue": groups[1]}'
+      ],
+      datasourceTemplate: "maven",
+    }
+  ]
+}
