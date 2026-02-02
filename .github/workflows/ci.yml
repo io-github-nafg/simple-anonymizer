@@ -1,0 +1,37 @@
+name: CI
+on:
+  push:
+    tags: [ 'v*' ]
+    branches: [ 'master' ]
+  pull_request:
+    branches: [ 'master' ]
+
+jobs:
+  build:
+    name: Test
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, 'ci skip')"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: bleep-build/bleep-setup-action@0.0.2
+      - uses: coursier/cache-action@v6
+        with:
+          extraFiles: bleep.yaml
+      - name: Test
+        run: bleep test
+
+  publish:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    needs: [ build ]
+    if: "startsWith(github.ref, 'refs/tags/v')"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: bleep-build/bleep-setup-action@0.0.2
+      - name: Release
+        run: bleep publish -- --mode=portal-api:AUTOMATIC
+        env:
+          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
+          PGP_SECRET: ${{ secrets.PGP_SECRET }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
