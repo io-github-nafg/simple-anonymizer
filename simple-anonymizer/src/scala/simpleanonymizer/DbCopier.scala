@@ -85,14 +85,20 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
     val tableSpecsMap = tableSpecs.toMap
 
     for {
+      _            <- Future.successful(println("[DbCopier] Fetching table metadata..."))
       tables       <- sourceDb.run(dbMetadata.getAllTables)
+      _             = println(s"[DbCopier] Found ${tables.size} tables. Fetching foreign keys...")
       fks          <- sourceDb.run(dbMetadata.getAllForeignKeys)
+      _             = println(s"[DbCopier] Found ${fks.size} foreign keys. Computing table order...")
       orderedTables = TableSorter(tables, fks).flatten
       filters       = FilterPropagation.computeEffectiveFilters(orderedTables.map(_.name.name), fks, tableSpecsMap)
+      _             = println(s"[DbCopier] Validating table coverage...")
       // Validate that all non-skipped tables have transformers
       _            <- sourceDb.run(CoverageValidator.ensureAllTables(tables.map(_.name), skippedTables, tableSpecsMap.keySet))
+      _             = println(s"[DbCopier] Validating column coverage...")
       // Validate that each transformer covers all required columns
       _            <- sourceDb.run(CoverageValidator.ensureAllColumns(tableSpecsMap, tables.map(t => t.name.name -> t.name).toMap))
+      _             = println(s"[DbCopier] Validation passed. Copying ${orderedTables.size} tables...")
       // Copy tables level by level
       result       <- copyTablesInOrder(orderedTables, skippedTables, tableSpecsMap, filters)
     } yield result
