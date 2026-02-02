@@ -1,6 +1,6 @@
 # simple-anonymizer
 
-A Scala library for deterministic data anonymization with a composable DSL, plus database copying with transformations.
+A Scala library for creating anonymized copies of PostgreSQL databases for development, staging, or testing environments. Provides a composable DSL for defining per-table transformations with deterministic fake data that preserves referential integrity.
 
 ## Features
 
@@ -10,6 +10,8 @@ A Scala library for deterministic data anonymization with a composable DSL, plus
 - **JSON support** — Transform fields within JSON arrays and objects
 - **Database copying** — Copy tables between PostgreSQL databases with optional transformations
 - **FK-aware ordering** — Automatically determine correct table copy order based on foreign keys
+- **Filter propagation** — WHERE clauses on parent tables automatically propagate to child tables via FK subqueries
+- **Validation** — Fails with copy-pastable code snippets if you miss a table or column
 
 ## Installation
 
@@ -17,13 +19,13 @@ Add to your `bleep.yaml`:
 
 ```yaml
 dependencies:
-  - io.github.nafg::simple-anonymizer:VERSION
+  - io.github.nafg.simple-anonymizer::simple-anonymizer:VERSION
 ```
 
 Or for sbt:
 
 ```scala
-libraryDependencies += "io.github.nafg" %% "simple-anonymizer" % "VERSION"
+libraryDependencies += "io.github.nafg.simple-anonymizer" %% "simple-anonymizer" % "VERSION"
 ```
 
 ## Quick Start
@@ -44,50 +46,17 @@ val personSpec = TableSpec.select { row =>
 
 ## Database Copying
 
-Copy tables between PostgreSQL databases with optional anonymization. Uses Slick for async database operations:
+Copy entire PostgreSQL databases with automatic FK ordering, filter propagation, and validation. Uses Slick for async database operations.
 
 ```scala
-import simpleanonymizer.{Anonymizer, TableCopier, TableSpec}
+import simpleanonymizer.{Anonymizer, DbCopier, TableSpec}
 import simpleanonymizer.SlickProfile.api._
 import scala.concurrent.ExecutionContext.Implicits.global
 
 val sourceDb = Database.forURL(sourceUrl, user, pass)
 val targetDb = Database.forURL(targetUrl, user, pass)
-
-// Define transformer for sensitive columns
-val userSpec = TableSpec.select { row =>
-  Seq(
-    row.first_name.mapString(Anonymizer.FirstName),
-    row.last_name.mapString(Anonymizer.LastName),
-    row.email.mapString(Anonymizer.Email)
-  )
-}
-
-// Copy with transformation
-for {
-  columns <- sourceDb.run(MColumn.getColumns(table, "%")).map(_.map(_.name))
-  count   <- TableCopier.copyTable(
-               sourceDb = sourceDb,
-               targetDb = targetDb,
-               schema = "public",
-               tableName = "users",
-               columns = columns,
-               tableSpec = Some(userSpec)
-             )
-} yield count
-```
-
-### High-Level DbCopier API
-
-For copying entire databases with automatic FK ordering and filter propagation.
-Requires explicit handling for all tables - either a transformer or explicit skip.
-
-```scala
-import simpleanonymizer.{Anonymizer, DbCopier, TableSpec}
-
 val copier = new DbCopier(sourceDb, targetDb)
 
-// Define handling for each table
 for {
   result <- copier.run(
     "users"    -> TableSpec.select { row =>
@@ -96,7 +65,7 @@ for {
         row.last_name.mapString(Anonymizer.LastName),
         row.email.mapString(Anonymizer.Email)
       )
-    }.where("active = true"),  // Optional filter
+    }.where("active = true"),  // Optional filter — propagates to child tables
     "orders"   -> TableSpec.select { row =>
       Seq(row.description, row.amount)  // Type preserved (DECIMAL)
     },
@@ -110,20 +79,20 @@ for {
 } yield result  // Map[tableName -> rowCount]
 ```
 
-#### TableSpec Options
+`DbCopier` automatically:
+- Sorts tables by FK dependencies so parent rows exist before child rows
+- Propagates WHERE clauses through FKs (e.g., filtering `users` also filters `orders` referencing those users)
+- Validates that every table and every non-PK/non-FK column is handled
 
-| Method | Description |
-|--------|-------------|
-| `TableSpec.select { row => Seq(...) }` | Copy with transformation |
-| `select { row => Seq(...) }.where("...")` | Copy with filter |
-
-Use the `skippedTables` constructor parameter to skip tables:
+### Skipping Tables
 
 ```scala
 val copier = new DbCopier(sourceDb, targetDb, skippedTables = Set("audit_logs", "temp_data"))
 ```
 
-If you miss a table or column, the error message includes copy-pastable code snippets:
+### Validation
+
+`DbCopier.run()` validates that all tables and columns are covered. If you miss something, it fails with copy-pastable code snippets:
 
 ```
 Missing table specs for 2 table(s).
@@ -136,57 +105,8 @@ Add these tables to copier.run(...):
       row.description
     )
   }
-```
 
-### Copy Options
-
-```scala
-TableCopier.copyTable(
-  sourceDb = sourceDb,
-  targetDb = targetDb,
-  schema = "public",
-  tableName = "users",
-  columns = columns,
-  whereClause = Some("created_at > '2024-01-01'"),  // Filter rows
-  limit = Some(1000),                                // Limit row count
-  tableSpec = Some(userSpec)                         // Apply anonymization
-)
-```
-
-### FK-Aware Table Ordering
-
-The `TableSorter` module handles topological sorting based on foreign key dependencies:
-
-```scala
-import simpleanonymizer.TableSorter
-
-for {
-  tables        <- sourceDb.run(dbMetadata.getAllTables)
-  fks           <- sourceDb.run(dbMetadata.getAllForeignKeys)
-  orderedGroups  = TableSorter(tables, fks)
-  // Returns Seq[Seq[MTable]] - tables grouped by level
-  // Level 0: no dependencies, Level 1: depends on level 0, etc.
-} yield orderedGroups
-```
-
-### Filter Propagation
-
-The `FilterPropagation` module automatically propagates WHERE clauses through FK relationships:
-
-```scala
-import simpleanonymizer.FilterPropagation
-
-for {
-  tables <- sourceDb.run(dbMetadata.getAllTables)
-  fks    <- sourceDb.run(dbMetadata.getAllForeignKeys)
-} yield {
-  val tableSpecs = Map(
-    "users" -> TableSpec.select { row => Seq(row.name, row.email) }.where("active = true")
-  )
-  val effectiveFilters = FilterPropagation.computeEffectiveFilters(tables.map(_.name.name), fks, tableSpecs)
-  // Child tables (orders, profiles) automatically get:
-  // "user_id IN (SELECT id FROM users WHERE active = true)"
-}
+Or skip them via DbCopier(skippedTables = Set("products"))
 ```
 
 ## DSL Reference
@@ -201,23 +121,6 @@ for {
 | `row.column.nulled` | Replace with null | Clear sensitive fields |
 | `row.column := value` | Constant replacement (any type) | `row.status := "REDACTED"` |
 | `row.column.mapJsonArray(_.field.mapString(f))` | Transform field within JSON array | See below |
-
-### Composing Columns
-
-Use `Seq(...)` to compose multiple column transformations:
-
-```scala
-import simpleanonymizer.{Anonymizer, TableSpec}
-
-val spec = TableSpec.select { row =>
-  Seq(
-    row.first_name.mapString(Anonymizer.FirstName),
-    row.last_name.mapString(Anonymizer.LastName),
-    row.email.mapString(Anonymizer.Email),
-    row.created_at  // passthrough
-  )
-}
-```
 
 ## Available Anonymizers
 
@@ -302,73 +205,6 @@ All anonymizers use MD5 hashing to ensure:
 4. **Referential integrity** — Same value in different tables produces same anonymized value
 
 This is particularly important when anonymizing databases where the same email or name might appear in multiple tables and must remain consistent.
-
-## Validation
-
-`TableSpec` provides validation to ensure all columns are covered:
-
-```scala
-val spec = TableSpec.select { row =>
-  Seq(
-    row.first.mapString(Anonymizer.FirstName),
-    row.last.mapString(Anonymizer.LastName)
-  )
-}
-
-val expectedColumns = Set("first", "last", "email")
-
-spec.validateCovers(expectedColumns) match {
-  case Left(missing) => println(s"Missing columns: $missing") // Set("email")
-  case Right(())     => println("All columns covered")
-}
-```
-
-## Architecture
-
-```
-simpleanonymizer/
-├── Anonymizer.scala               — Anonymization functions using DataFaker
-│   ├── Anonymizer trait (extends String => String)
-│   ├── Hash-based deterministic selection
-│   └── Pre-fetched data lists for performance
-│
-├── Lens.scala                     — JSON navigation
-│   └── Lens                       — Direct, Field, ArrayElements
-│
-├── OutputColumn.scala             — Column output specifications
-│   ├── SourceColumn               — Passthrough (preserves type)
-│   ├── TransformedColumn          — String transformation (null-preserving)
-│   └── FixedColumn                — Fixed value of any type
-│
-├── TableSpec.scala                — Table specification & DSL entry point
-│   ├── TableSpec.select { row => Seq(...) } — Entry point (returns TableSpec)
-│   ├── columns: Seq[OutputColumn] — Column transformations
-│   ├── whereClause: Option[String] — Optional filter
-│   └── validateCovers             — Column coverage validation
-│
-├── TableCopier.scala              — Low-level table copy operations
-│   └── copyTable                  — Copy with optional transformation
-│
-├── DbCopier.scala                 — High-level orchestrator (Slick-based)
-│   └── run                        — Copy all tables with FK ordering
-│
-├── CoverageValidator.scala        — Validation and error messages
-│   ├── getDataColumns             — List non-PK, non-FK columns
-│   ├── ensureAllColumns           — Validate all columns are covered
-│   └── ensureAllTables            — Validate all tables are handled
-│
-├── DbMetadata.scala               — Database schema introspection
-│   ├── getAllTables               — List tables in schema
-│   └── getAllForeignKeys          — Get all FK relationships
-│
-├── TableSorter.scala              — FK-based table ordering
-│   └── apply(tables, fks)         — Returns tables grouped by dependency level
-│
-├── FilterPropagation.scala        — WHERE clause propagation
-│   └── computeEffectiveFilters    — Propagate filters through FKs
-│
-└── SlickProfile.scala             — PostgreSQL profile with slick-pg
-```
 
 ## License
 
