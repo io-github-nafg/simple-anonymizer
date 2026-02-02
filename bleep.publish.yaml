@@ -1,0 +1,17 @@
+groupId: io.github.nafg.simple-anonymizer
+projects:
+  - simple-anonymizer
+sonatype:
+  profileName: io.github.nafg
+  bundleName: simple-anonymizer
+info:
+  description: A Scala library for deterministic database anonymization with referential integrity
+  homePage: https://github.com/io-github-nafg/simple-anonymizer
+  developers:
+    - name: Naftoli Gugenheim
+      id: nafg
+      url: https://github.com/nafg
+  licenseInfo:
+    - name: Apache-2.0
+      url: https://www.apache.org/licenses/LICENSE-2.0.txt
+      distribution: repo

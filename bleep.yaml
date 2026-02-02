@@ -3,6 +3,11 @@ $version: 0.0.14
 jvm:
   name: graalvm-community:25.0.1
 projects:
+  scripts:
+    dependencies: io.github.nafg.bleep-plugins::bleep-plugin-publish:0.4.0
+    extends:
+    - template-common
+    - template-scala-3
   simple-anonymizer:
     dependencies:
     - io.circe::circe-core:0.14.15
@@ -28,6 +33,10 @@ projects:
     dependsOn: simple-anonymizer
     extends: template-cross-all
     isTestProject: true
+scripts:
+  publish:
+    main: io.github.nafg.bleep.plugins.publish.Publish
+    project: scripts
 templates:
   template-common:
     platform:
