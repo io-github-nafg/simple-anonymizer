@@ -1,7 +1,7 @@
 package simpleanonymizer
 
 import org.scalatest.BeforeAndAfterAll
-import org.scalatest.funsuite.AsyncFunSuite
+import org.scalatest.funspec.AsyncFunSpec
 import org.testcontainers.utility.MountableFile
 import slick.additions.testcontainers.SlickPostgresContainer
 
@@ -35,7 +35,7 @@ object PostgresTestBase {
 }
 
 /** Base trait for integration tests that need a PostgreSQL container with schema and test data. */
-trait PostgresTestBase extends AsyncFunSuite with BeforeAndAfterAll {
+trait PostgresTestBase extends AsyncFunSpec with BeforeAndAfterAll {
   protected val dbMetadata: DbMetadata = new DbMetadata("public")
 
   protected lazy val container: SlickPostgresContainer = PostgresTestBase.createContainer()
