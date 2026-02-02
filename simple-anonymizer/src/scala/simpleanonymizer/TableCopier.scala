@@ -5,7 +5,9 @@ import simpleanonymizer.SlickProfile.api._
 import simpleanonymizer.SlickProfile.quoteIdentifier
 import slick.jdbc.GetResult
 
-import scala.concurrent.{ExecutionContext, Future}
+import scala.collection.mutable.ArrayBuffer
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext, Future}
 
 object TableCopier {
   def copyTable(
@@ -72,69 +74,63 @@ object TableCopier {
     val columnTypesAction = getColumnTypes(tableName)
 
     sourceDb.run(columnTypesAction).flatMap { columnTypes =>
-      val selectAction = sql"#$selectSql".as[RawRow]
+      val batchSize = 1000
 
-      sourceDb.run(selectAction).flatMap { rows =>
-        if (rows.isEmpty) {
-          println(s"[TableCopier] No rows to copy from $tableName")
-          Future.successful(0)
-        } else {
-          val batchSize = 1000
-          val batches   = rows.grouped(batchSize).toList
+      // Build a map of column name -> OutputColumn for quick lookup
+      val columnPlans: Map[String, OutputColumn] =
+        tableSpec.map(_.columns.map(plan => plan.name -> plan).toMap).getOrElse(Map.empty)
 
-          // Build a map of column name -> OutputColumn for quick lookup
-          val columnPlans: Map[String, OutputColumn] =
-            tableSpec.map(_.columns.map(plan => plan.name -> plan).toMap).getOrElse(Map.empty)
+      // Precompute per-column writers to avoid pattern matching in the hot loop
+      val writers: Vector[RawRow => AnyRef] = columns.indices.map { idx =>
+        val column     = columns(idx)
+        val columnType = columnTypes(idx)
 
-          // Precompute per-column writers to avoid pattern matching in the hot loop
-          val writers: Vector[RawRow => AnyRef] = columns.indices.map { idx =>
-            val column     = columns(idx)
-            val columnType = columnTypes(idx)
+        columnPlans.get(column) match {
+          case Some(plan) => plan.transform(wrapIfJson(_, columnType))
+          case None       =>
+            // Column not in transformer - use the original raw object
+            (rawRow: RawRow) => wrapIfJson(rawRow.objects.getOrElse(column, null), columnType)
+        }
+      }.toVector
 
-            columnPlans.get(column) match {
-              case Some(plan) => plan.transform(wrapIfJson(_, columnType))
-              case None       =>
-                // Column not in transformer - use the original raw object
-                (rawRow: RawRow) => wrapIfJson(rawRow.objects.getOrElse(column, null), columnType)
-            }
-          }.toVector
+      val selectAction    = sql"#$selectSql".as[RawRow]
+      val streamingAction = selectAction.transactionally.withStatementParameters(fetchSize = batchSize)
 
-          def processBatches(remaining: List[Seq[RawRow]], count: Int): Future[Int] =
-            remaining match {
-              case Nil           => Future.successful(count)
-              case batch :: rest =>
-                val batchInsertAction = SimpleDBIO[Int] { ctx =>
-                  val conn       = ctx.connection
-                  val stmt       = conn.prepareStatement(insertSql)
-                  var batchCount = 0
+      def insertBatch(batch: Vector[RawRow]): Int = {
+        val action = SimpleDBIO[Int] { ctx =>
+          val stmt = ctx.connection.prepareStatement(insertSql)
+          for (rawRow <- batch) {
+            for (idx <- columns.indices)
+              stmt.setObject(idx + 1, writers(idx)(rawRow))
+            stmt.addBatch()
+          }
+          stmt.executeBatch()
+          stmt.close()
+          batch.size
+        }
+        Await.result(targetDb.run(action), Duration.Inf)
+      }
 
-                  for (rawRow <- batch) {
-                    for (idx <- columns.indices)
-                      stmt.setObject(idx + 1, writers(idx)(rawRow))
+      val buffer = new ArrayBuffer[RawRow](batchSize)
+      var count  = 0
 
-                    stmt.addBatch()
-                    batchCount += 1
-                  }
-
-                  stmt.executeBatch()
-                  stmt.close()
-                  batchCount
-                }
-
-                targetDb.run(batchInsertAction).flatMap { inserted =>
-                  val newCount = count + inserted
-                  if (newCount % 1000 == 0 || rest.isEmpty)
-                    println(s"[TableCopier] Inserted $newCount rows...")
-                  processBatches(rest, newCount)
-                }
-            }
-
-          processBatches(batches, 0).map { totalCount =>
-            println(s"[TableCopier] Copied $totalCount rows from $tableName")
-            totalCount
+      sourceDb
+        .stream(streamingAction)
+        .foreach { row =>
+          buffer += row
+          if (buffer.size >= batchSize) {
+            count += insertBatch(buffer.toVector)
+            buffer.clear()
+            if (count % 1000 == 0)
+              println(s"[TableCopier] Inserted $count rows into $tableName...")
           }
         }
-      }
+        .map { _ =>
+          if (buffer.nonEmpty)
+            count += insertBatch(buffer.toVector)
+          println(s"[TableCopier] Copied $count rows from $tableName")
+          count
+        }
     }
   }
 }
