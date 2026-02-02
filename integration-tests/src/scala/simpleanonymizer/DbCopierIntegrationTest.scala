@@ -7,7 +7,8 @@ import SlickProfile.api._
 
 /** Integration tests demonstrating DbCopier API usage.
   *
-  * These tests serve as working examples of how to use the library. The focus is on clean, readable code that shows typical usage patterns.
+  * These tests serve as working examples of how to use the library. The focus is on clean, readable code that shows typical usage patterns. Keep specs explicit
+  * to reflect realistic usage.
   */
 class DbCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll {
 
