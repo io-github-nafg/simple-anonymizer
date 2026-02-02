@@ -10,6 +10,43 @@ import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 
 object TableCopier {
+
+  /** Wrap a value as a PGobject if the column type is JSON/JSONB, otherwise return as-is */
+  private def wrapIfJson(value: AnyRef, columnType: String): AnyRef =
+    if (value != null && (columnType == "jsonb" || columnType == "json")) {
+      val jsonObj = new PGobject()
+      jsonObj.setType(columnType)
+      jsonObj.setValue(value.toString)
+      jsonObj
+    } else
+      value
+
+  private val batchSize = 1000
+
+  private abstract class BatchInserter(tableName: String) {
+    val buffer = new ArrayBuffer[RawRow](batchSize)
+    var count  = 0
+
+    def insertBatch(batch: Vector[RawRow]): Int
+
+    def receiveBatch(row: RawRow): Unit = {
+      buffer += row
+      if (buffer.size >= batchSize) {
+        count += insertBatch(buffer.toVector)
+        buffer.clear()
+        if (count % 1000 == 0)
+          println(s"[TableCopier] Inserted $count rows into $tableName...")
+      }
+    }
+
+    def flush() = {
+      if (buffer.nonEmpty)
+        count += insertBatch(buffer.toVector)
+      println(s"[TableCopier] Copied $count rows from $tableName")
+      count
+    }
+  }
+
   def copyTable(
       sourceDb: Database,
       targetDb: Database,
@@ -22,7 +59,7 @@ object TableCopier {
   )(implicit ec: ExecutionContext): Future[Int] = {
 
     /** Get column types for a table using raw SQL */
-    def getColumnTypes(tableName: String)(implicit ec: ExecutionContext): DBIO[Seq[String]] =
+    val columnTypesAction: DBIO[Seq[String]] =
       sql"""
         SELECT column_name, data_type
         FROM information_schema.columns
@@ -31,33 +68,6 @@ object TableCopier {
         val typeMap = colTypes.toMap
         columns.map(c => typeMap.getOrElse(c, "unknown"))
       }
-
-    /** Wrap a value as a PGobject if the column type is JSON/JSONB, otherwise return as-is */
-    def wrapIfJson(value: AnyRef, columnType: String): AnyRef =
-      if (value != null && (columnType == "jsonb" || columnType == "json")) {
-        val jsonObj = new PGobject()
-        jsonObj.setType(columnType)
-        jsonObj.setValue(value.toString)
-        jsonObj
-      } else
-        value
-
-    val quotedTable  = quoteIdentifier(tableName)
-    val columnList   = columns.map(quoteIdentifier).mkString(", ")
-    val placeholders = columns.map(_ => "?").mkString(", ")
-
-    val orderBy = limit.filter(_ => columns.contains("id")).map(_ => s" ORDER BY ${quoteIdentifier("id")} DESC").getOrElse("")
-
-    val selectSql =
-      s"SELECT $columnList FROM $quotedTable" +
-        whereClause.fold("")(w => s" WHERE $w") +
-        orderBy +
-        limit.fold("")(n => s" LIMIT $n")
-    val insertSql = s"INSERT INTO $quotedTable ($columnList) VALUES ($placeholders)"
-
-    println(s"[TableCopier] Copying table: $tableName")
-    println(s"[TableCopier] SELECT: $selectSql")
-    tableSpec.foreach(t => println(s"[TableCopier] Transforming columns: ${t.outputColumns.mkString(", ")}"))
 
     implicit val getRowResult: GetResult[RawRow] = GetResult { r =>
       val objectsAndStrings = columns.map { col =>
@@ -71,17 +81,31 @@ object TableCopier {
       )
     }
 
-    val columnTypesAction = getColumnTypes(tableName)
+    val quotedTable  = quoteIdentifier(tableName)
+    val columnList   = columns.map(quoteIdentifier).mkString(", ")
+    val placeholders = columns.map(_ => "?").mkString(", ")
 
-    sourceDb.run(columnTypesAction).flatMap { columnTypes =>
-      val batchSize = 1000
+    val orderBy =
+      limit.filter(_ => columns.contains("id")).map(_ => s" ORDER BY ${quoteIdentifier("id")} DESC").getOrElse("")
 
-      // Build a map of column name -> OutputColumn for quick lookup
+    val selectSql =
+      s"SELECT $columnList FROM $quotedTable" +
+        whereClause.fold("")(w => s" WHERE $w") +
+        orderBy +
+        limit.fold("")(n => s" LIMIT $n")
+    val insertSql = s"INSERT INTO $quotedTable ($columnList) VALUES ($placeholders)"
+
+    println(s"[TableCopier] Copying table: $tableName")
+    println(s"[TableCopier] SELECT: $selectSql")
+    tableSpec.foreach(t => println(s"[TableCopier] Transforming columns: ${t.outputColumns.mkString(", ")}"))
+
+    def buildWriters(columnTypes: Seq[String]): Vector[RawRow => AnyRef] = {
+      // Build a map of column name -> OutputColumn for a quick lookup
       val columnPlans: Map[String, OutputColumn] =
         tableSpec.map(_.columns.map(plan => plan.name -> plan).toMap).getOrElse(Map.empty)
 
       // Precompute per-column writers to avoid pattern matching in the hot loop
-      val writers: Vector[RawRow => AnyRef] = columns.indices.map { idx =>
+      columns.indices.map { idx =>
         val column     = columns(idx)
         val columnType = columnTypes(idx)
 
@@ -92,45 +116,33 @@ object TableCopier {
             (rawRow: RawRow) => wrapIfJson(rawRow.objects.getOrElse(column, null), columnType)
         }
       }.toVector
+    }
 
-      val selectAction    = sql"#$selectSql".as[RawRow]
-      val streamingAction = selectAction.transactionally.withStatementParameters(fetchSize = batchSize)
-
-      def insertBatch(batch: Vector[RawRow]): Int = {
-        val action = SimpleDBIO[Int] { ctx =>
-          val stmt = ctx.connection.prepareStatement(insertSql)
-          for (rawRow <- batch) {
-            for (idx <- columns.indices)
-              stmt.setObject(idx + 1, writers(idx)(rawRow))
-            stmt.addBatch()
-          }
-          stmt.executeBatch()
-          stmt.close()
-          batch.size
+    def batchInsertAction(batch: Vector[RawRow], writers: Vector[RawRow => AnyRef]) =
+      SimpleDBIO[Int] { ctx =>
+        val stmt = ctx.connection.prepareStatement(insertSql)
+        for (rawRow <- batch) {
+          for (idx <- columns.indices)
+            stmt.setObject(idx + 1, writers(idx)(rawRow))
+          stmt.addBatch()
         }
-        Await.result(targetDb.run(action), Duration.Inf)
+        stmt.executeBatch()
+        stmt.close()
+        batch.size
       }
 
-      val buffer = new ArrayBuffer[RawRow](batchSize)
-      var count  = 0
+    for {
+      columnTypes  <- sourceDb.run(columnTypesAction)
+      batchInserter = new BatchInserter(tableName) {
+                        val writers = buildWriters(columnTypes)
 
-      sourceDb
-        .stream(streamingAction)
-        .foreach { row =>
-          buffer += row
-          if (buffer.size >= batchSize) {
-            count += insertBatch(buffer.toVector)
-            buffer.clear()
-            if (count % 1000 == 0)
-              println(s"[TableCopier] Inserted $count rows into $tableName...")
-          }
-        }
-        .map { _ =>
-          if (buffer.nonEmpty)
-            count += insertBatch(buffer.toVector)
-          println(s"[TableCopier] Copied $count rows from $tableName")
-          count
-        }
-    }
+                        override def insertBatch(batch: Vector[RawRow]) = {
+                          val action = batchInsertAction(batch, writers)
+                          Await.result(targetDb.run(action), Duration.Inf)
+                        }
+                      }
+      action        = sql"#$selectSql".as[RawRow].transactionally.withStatementParameters(fetchSize = batchSize)
+      _            <- sourceDb.stream(action).foreach(batchInserter.receiveBatch)
+    } yield batchInserter.flush()
   }
 }
