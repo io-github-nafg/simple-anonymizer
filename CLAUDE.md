@@ -23,24 +23,32 @@ bleep fmt                    # Format code with scalafmt
 
 ## Architecture
 
-### DeterministicAnonymizer
+### Anonymizer
 
-Uses MD5 hashing to deterministically select from DataFaker's pre-loaded data lists. Same input always produces same output, enabling referential integrity across tables.
+`Anonymizer` trait extends `String => String`. Implementations use MD5 hashing to deterministically select from DataFaker's pre-loaded data lists. Same input always produces same output, enabling referential integrity across tables. Pass directly to `mapString`: `row.email.mapString(Anonymizer.Email)`.
 
-### RowTransformer DSL
+### Core Types
 
-Composable transformer system with layered abstractions:
-- `ValueTransformer` - Leaf transformations (e.g., anonymize a string)
-- `JsonNav` - JSON navigation for transforming fields within JSON columns
-- `ColumnSpec` - Column specifications, optionally depending on other columns
-- `TableTransformer` - Combines column specs into a row transformer
-- `DSL` - User-facing API (`table()`, `using()`, `passthrough`, `jsonArray()`, `col()`)
+- `OutputColumn` - Column output specification (SourceColumn, TransformedColumn, FixedColumn)
+- `Lens` - JSON navigation for transforming fields within JSON columns (Direct, Field, ArrayElements)
+- `TableSpec` - Combines output columns with optional WHERE clause
+- `RawRow` - Row representation with both objects and strings maps
+
+### DSL (on TableSpec companion)
+
+User-facing API using `TableSpec.select { row => Seq(...) }` syntax:
+- `row.column` - Passthrough (preserves original type)
+- `row.column.mapString(f)` - Apply String => String transformation (null-preserving)
+- `row.column.mapOptString(f)` - Apply Option[String] => Option[String] transformation
+- `row.column.nulled` - Set to null
+- `row.column := value` - Fixed value of any type
+- `row.column.mapJsonArray(_.field.mapString(f))` - JSON array transformation
 
 ### Database Modules
 
-- `DbSnapshot` - Copy tables between databases with optional transformations
-- `DbMetadata` - Schema introspection (tables, columns, primary/foreign keys)
-- `DependencyGraph` - Topological sort for correct FK-respecting copy order
+- `DbCopier` - Copy tables between databases with optional transformations
+- `DbMetadata` - Database schema introspection (tables, columns, keys)
+- `TableSorter` - Topological sort for correct FK-respecting copy order
 - `FilterPropagation` - Propagate WHERE clauses through FK relationships
 
 ## Code Style

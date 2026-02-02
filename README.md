@@ -6,9 +6,8 @@ A Scala library for deterministic data anonymization with a composable DSL, plus
 
 - **Deterministic anonymization** — Same input always produces same output (using MD5 hash-based selection)
 - **Realistic fake data** — Uses DataFaker's curated data lists for names, addresses, etc.
-- **Composable DSL** — Build table transformers by combining column specifications
+- **Composable DSL** — Build table transformers using `TableSpec.select { row => Seq(...) }` syntax
 - **JSON support** — Transform fields within JSON arrays and objects
-- **Dependent columns** — Columns that depend on other columns' values
 - **Database copying** — Copy tables between PostgreSQL databases with optional transformations
 - **FK-aware ordering** — Automatically determine correct table copy order based on foreign keys
 
@@ -30,32 +29,17 @@ libraryDependencies += "io.github.nafg" %% "simple-anonymizer" % "VERSION"
 ## Quick Start
 
 ```scala
-import simpleanonymizer.DeterministicAnonymizer.*
-import simpleanonymizer.RowTransformer.DSL.*
+import simpleanonymizer.{Anonymizer, TableSpec}
 
-// Define a table transformer
-val personTransformer = table(
-  "first_name" -> using(FirstName.anonymize),
-  "last_name"  -> using(LastName.anonymize),
-  "email"      -> using(Email.anonymize),
-  "created_at" -> passthrough
-)
-
-// Transform a row
-val row = Map(
-  "first_name" -> "John",
-  "last_name"  -> "Doe",
-  "email"      -> "john.doe@company.com",
-  "created_at" -> "2024-01-15"
-)
-
-val anonymized = personTransformer.transform(row)
-// Result: Map(
-//   "first_name" -> "Michael",
-//   "last_name"  -> "Anderson",
-//   "email"      -> "sarah.wilson@example.com",
-//   "created_at" -> "2024-01-15"
-// )
+// Define a table spec with transformations
+val personSpec = TableSpec.select { row =>
+  Seq(
+    row.first_name.mapString(Anonymizer.FirstName),
+    row.last_name.mapString(Anonymizer.LastName),
+    row.email.mapString(Anonymizer.Email),
+    row.created_at  // passthrough
+  )
+}
 ```
 
 ## Database Copying
@@ -63,66 +47,66 @@ val anonymized = personTransformer.transform(row)
 Copy tables between PostgreSQL databases with optional anonymization. Uses Slick for async database operations:
 
 ```scala
-import simpleanonymizer.DbSnapshot.*
-import simpleanonymizer.SlickProfile.api.*
-import simpleanonymizer.DeterministicAnonymizer.*
-import simpleanonymizer.RowTransformer.DSL.*
+import simpleanonymizer.{Anonymizer, TableCopier, TableSpec}
+import simpleanonymizer.SlickProfile.api._
 import scala.concurrent.ExecutionContext.Implicits.global
 
 val sourceDb = Database.forURL(sourceUrl, user, pass)
 val targetDb = Database.forURL(targetUrl, user, pass)
 
 // Define transformer for sensitive columns
-val userTransformer = table(
-  "first_name" -> using(FirstName.anonymize),
-  "last_name"  -> using(LastName.anonymize),
-  "email"      -> using(Email.anonymize)
-)
+val userSpec = TableSpec.select { row =>
+  Seq(
+    row.first_name.mapString(Anonymizer.FirstName),
+    row.last_name.mapString(Anonymizer.LastName),
+    row.email.mapString(Anonymizer.Email)
+  )
+}
 
 // Copy with transformation
 for {
-  columns <- sourceDb.run(getTableColumns("users"))
-  count   <- copyTable(
+  columns <- sourceDb.run(MColumn.getColumns(table, "%")).map(_.map(_.name))
+  count   <- TableCopier.copyTable(
                sourceDb = sourceDb,
                targetDb = targetDb,
+               schema = "public",
                tableName = "users",
                columns = columns,
-               transformer = Some(userTransformer)
+               tableSpec = Some(userSpec)
              )
 } yield count
 ```
 
-### High-Level Snapshot API
+### High-Level DbCopier API
 
 For copying entire databases with automatic FK ordering and filter propagation.
 Requires explicit handling for all tables - either a transformer or explicit skip.
 
 ```scala
-import simpleanonymizer.{Snapshot, DbSnapshot}
-import simpleanonymizer.DbSnapshot.TableSpec
-import simpleanonymizer.DbSnapshot.TableSpec.*
-import simpleanonymizer.RowTransformer.DSL.*
-import simpleanonymizer.DeterministicAnonymizer.*
+import simpleanonymizer.{Anonymizer, DbCopier, TableSpec}
 
-val snapshot = new Snapshot(sourceDb, targetDb)
+val copier = new DbCopier(sourceDb, targetDb)
 
-// Define handling for each table using TableSpec
+// Define handling for each table
 for {
-  result <- snapshot.copy(Map(
-    "users"      -> copy(
-      table(
-        "first_name" -> using(FirstName.anonymize),
-        "last_name"  -> using(LastName.anonymize),
-        "email"      -> using(Email.anonymize)
-      ),
-      where = "active = true"  // Optional filter
-    ),
-    "orders"     -> copy(table(
-      "description" -> passthrough,
-      "amount"      -> passthrough  // Type preserved (DECIMAL)
-    )),
-    "audit_logs" -> skip  // Exclude from copy
-  ))
+  result <- copier.run(
+    "users"    -> TableSpec.select { row =>
+      Seq(
+        row.first_name.mapString(Anonymizer.FirstName),
+        row.last_name.mapString(Anonymizer.LastName),
+        row.email.mapString(Anonymizer.Email)
+      )
+    }.where("active = true"),  // Optional filter
+    "orders"   -> TableSpec.select { row =>
+      Seq(row.description, row.amount)  // Type preserved (DECIMAL)
+    },
+    "profiles" -> TableSpec.select { row =>
+      Seq(
+        row.phones.mapJsonArray(_.number.mapString(Anonymizer.PhoneNumber)),
+        row.settings
+      )
+    }
+  )
 } yield result  // Map[tableName -> rowCount]
 ```
 
@@ -130,77 +114,76 @@ for {
 
 | Method | Description |
 |--------|-------------|
-| `skip` | Skip table entirely |
-| `copy(transformer)` | Copy with transformer |
-| `copy(transformer, where)` | Copy with filter |
+| `TableSpec.select { row => Seq(...) }` | Copy with transformation |
+| `select { row => Seq(...) }.where("...")` | Copy with filter |
+
+Use the `skippedTables` constructor parameter to skip tables:
+
+```scala
+val copier = new DbCopier(sourceDb, targetDb, skippedTables = Set("audit_logs", "temp_data"))
+```
 
 If you miss a table or column, the error message includes copy-pastable code snippets:
 
 ```
-Missing transformers for 2 table(s).
+Missing table specs for 2 table(s).
 
-Add these tables to 'transformers':
+Add these tables to copier.run(...):
 
-"products" -> table(
-    "name" -> passthrough,
-    "description" -> passthrough
-  ),
-
-Or mark them as skipped in 'tableConfigs':
-"products" -> TableConfig(skip = true),
+"products" -> TableSpec.select { row =>
+    Seq(
+      row.name,
+      row.description
+    )
+  }
 ```
 
 ### Copy Options
 
 ```scala
-copyTable(
+TableCopier.copyTable(
   sourceDb = sourceDb,
   targetDb = targetDb,
+  schema = "public",
   tableName = "users",
   columns = columns,
   whereClause = Some("created_at > '2024-01-01'"),  // Filter rows
   limit = Some(1000),                                // Limit row count
-  transformer = Some(userTransformer)                // Apply anonymization
+  tableSpec = Some(userSpec)                         // Apply anonymization
 )
 ```
 
 ### FK-Aware Table Ordering
 
-Copy tables in the correct order based on foreign key dependencies:
+The `TableSorter` module handles topological sorting based on foreign key dependencies:
 
 ```scala
+import simpleanonymizer.TableSorter
+
 for {
-  tables        <- sourceDb.run(getAllTables())
-  fks           <- sourceDb.run(getForeignKeys())
-  tableLevels    = computeTableLevels(tables, fks)
-  orderedGroups  = groupTablesByLevel(tableLevels)
-  // Copy in order: level 0 (no dependencies), then level 1, etc.
-  _ <- orderedGroups.foldLeft(Future.successful(())) { (prev, group) =>
-    prev.flatMap { _ =>
-      Future.traverse(group) { table =>
-        for {
-          cols  <- sourceDb.run(getTableColumns(table))
-          count <- copyTable(sourceDb, targetDb, table, cols)
-        } yield count
-      }
-    }
-  }
-} yield ()
+  tables        <- sourceDb.run(dbMetadata.getAllTables)
+  fks           <- sourceDb.run(dbMetadata.getAllForeignKeys)
+  orderedGroups  = TableSorter(tables, fks)
+  // Returns Seq[Seq[MTable]] - tables grouped by level
+  // Level 0: no dependencies, Level 1: depends on level 0, etc.
+} yield orderedGroups
 ```
 
 ### Filter Propagation
 
-Automatically propagate WHERE clauses through FK relationships:
+The `FilterPropagation` module automatically propagates WHERE clauses through FK relationships:
 
 ```scala
+import simpleanonymizer.FilterPropagation
+
 for {
-  tables <- sourceDb.run(getAllTables())
-  fks    <- sourceDb.run(getForeignKeys())
+  tables <- sourceDb.run(dbMetadata.getAllTables)
+  fks    <- sourceDb.run(dbMetadata.getAllForeignKeys)
 } yield {
-  val tableConfigs = Map(
-    "users" -> TableConfig(whereClause = Some("active = true"))
+  val tableSpecs = Map(
+    "users" -> TableSpec.select { row => Seq(row.name, row.email) }.where("active = true")
   )
-  val effectiveFilters = computeEffectiveFilters(tables, fks, tableConfigs)
+  val effectiveFilters = FilterPropagation.computeEffectiveFilters(tables.map(_.name.name), fks, tableSpecs)
   // Child tables (orders, profiles) automatically get:
   // "user_id IN (SELECT id FROM users WHERE active = true)"
 }
@@ -208,81 +191,73 @@ for {
 
 ## DSL Reference
 
-### Basic Transformers
+### Column Transformations
 
-| Transformer | Description | Example |
-|-------------|-------------|---------|
-| `passthrough` | Copy value unchanged (preserves original type) | IDs, timestamps, non-PII, numeric columns |
-| `using(f)` | Apply String => String transformation | `using(FirstName.anonymize)` |
-| `setNull` | Replace with null | Sensitive fields to clear |
-| `fixed(value)` | Constant replacement (any type) | `fixed("REDACTED")`, `fixed(0)` |
-| `jsonArray(field)(f)` | Transform field within JSON array | `jsonArray("number")(PhoneNumber.anonymize)` |
-| `col(name).map(f)` | Dependent transformation | `col("state").map(st => _ => fakeZipForState(st))` |
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `row.column` | Passthrough (preserves original type) | IDs, timestamps, numeric columns |
+| `row.column.mapString(f)` | Apply String => String transformation | `row.email.mapString(Anonymizer.Email)` |
+| `row.column.mapOptString(f)` | Apply Option[String] => Option[String] transformation | Handle null values explicitly |
+| `row.column.nulled` | Replace with null | Clear sensitive fields |
+| `row.column := value` | Constant replacement (any type) | `row.status := "REDACTED"` |
+| `row.column.mapJsonArray(_.field.mapString(f))` | Transform field within JSON array | See below |
 
-### Building Table Transformers
+### Composing Columns
+
+Use `Seq(...)` to compose multiple column transformations:
 
 ```scala
-import simpleanonymizer.RowTransformer.DSL.*
+import simpleanonymizer.{Anonymizer, TableSpec}
 
-val transformer = table(
-  "column1" -> passthrough,
-  "column2" -> using(someFunction),
-  "column3" -> jsonArray("fieldName")(transformFunc)
-)
+val spec = TableSpec.select { row =>
+  Seq(
+    row.first_name.mapString(Anonymizer.FirstName),
+    row.last_name.mapString(Anonymizer.LastName),
+    row.email.mapString(Anonymizer.Email),
+    row.created_at  // passthrough
+  )
+}
 ```
 
 ## Available Anonymizers
 
-Anonymizers are `String => String` functions that produce realistic fake data. They are separate from transformers (like `passthrough`, `setNull`, `fixed`) which handle type preservation.
-
-All anonymizers are in `DeterministicAnonymizer` and implement the `Anonymizer` trait:
-
-```scala
-sealed trait Anonymizer {
-  def anonymize(input: String): String
-}
-
-// Usage in DSL:
-"column" -> using(FirstName.anonymize)
-```
+Anonymizers are `String => String` functions that produce realistic fake data. Pass them directly to `mapString`:
 
 ### Name Anonymizers
 
 | Anonymizer | Output Example |
 |------------|----------------|
-| `FirstName` | "Michael", "Sarah", "David" |
-| `MaleFirstName` | "James", "Robert", "William" |
-| `FemaleFirstName` | "Mary", "Jennifer", "Linda" |
-| `LastName` | "Smith", "Johnson", "Williams" |
-| `FullName` | "Michael Anderson", "Sarah Wilson" |
+| `Anonymizer.FirstName` | "Michael", "Sarah", "David" |
+| `Anonymizer.MaleFirstName` | "James", "Robert", "William" |
+| `Anonymizer.FemaleFirstName` | "Mary", "Jennifer", "Linda" |
+| `Anonymizer.LastName` | "Smith", "Johnson", "Williams" |
+| `Anonymizer.FullName` | "Michael Anderson", "Sarah Wilson" |
 
 ### Contact Anonymizers
 
 | Anonymizer | Output Example |
 |------------|----------------|
-| `Email` | "michael.anderson@example.com" |
-| `PhoneNumber` | "(503) 615-0345" |
+| `Anonymizer.Email` | "michael.anderson@example.com" |
+| `Anonymizer.PhoneNumber` | "(503) 615-0345" |
 
 ### Address Anonymizers
 
 | Anonymizer | Output Example |
 |------------|----------------|
-| `StreetAddress` | "1234 Wilson Street" |
-| `City` | "Andersonburg" |
-| `State` | "California" |
-| `StateAbbr` | "CA" |
-| `ZipCode` | "90210" |
-| `Country` | "United States" |
+| `Anonymizer.StreetAddress` | "1234 Wilson Street" |
+| `Anonymizer.City` | "Andersonburg" |
+| `Anonymizer.State` | "California" |
+| `Anonymizer.StateAbbr` | "CA" |
+| `Anonymizer.ZipCode` | "90210" |
+| `Anonymizer.Country` | "United States" |
 
 ### Other Anonymizers
 
 | Anonymizer | Description | Output Example |
 |------------|-------------|----------------|
-| `Redact` | Asterisks (preserves length) | "****" |
-| `PartialRedact(first, last)` | Partial masking | "Jo**oe" |
-| `LoremText` | Lorem ipsum of similar length | "lorem ipsum dolor..." |
-
-> **Note:** `passthrough`, `setNull`, and `fixed(value)` are transformers (not anonymizers) and preserve the original database type. Use them via the DSL: `passthrough`, `setNull`, `fixed("value")`.
+| `Anonymizer.Redact` | Asterisks (preserves length) | "****" |
+| `Anonymizer.PartialRedact(first, last)` | Partial masking | "Jo**oe" |
+| `Anonymizer.LoremText` | Lorem ipsum of similar length | "lorem ipsum dolor..." |
 
 ## JSON Column Support
 
@@ -292,45 +267,29 @@ Transform specific fields within JSON arrays:
 // Input column value:
 // [{"type": "Home", "number": "555-123-4567"}, {"type": "Work", "number": "555-987-6543"}]
 
-val transformer = table(
-  "phones" -> jsonArray("number")(PhoneNumber.anonymize)
-)
+val spec = TableSpec.select { row =>
+  Seq(row.phones.mapJsonArray(_.number.mapString(Anonymizer.PhoneNumber)))
+}
 
 // Output:
 // [{"type": "Home", "number": "(503) 615-0345"}, {"type": "Work", "number": "(721) 843-9012"}]
 ```
 
-## Dependent Column Transformations
+## Null Handling
 
-When a column's transformation depends on another column's value:
+`mapString` preserves null values — if the source column is null, the transformation function is not called and the output remains null. This is the desired behavior for anonymization (there's nothing sensitive about a missing value).
+
+For cases where you need to handle null values explicitly, use `mapOptString`:
 
 ```scala
-// Single dependency
-val transformer = table(
-  "state" -> using(StateAbbr.anonymize),
-  "zip"   -> col("state").map { stateValue =>
-    originalZip => generateZipForState(stateValue)
-  }
-)
-
-// Multiple dependencies
-val transformer = table(
-  "gender"     -> passthrough,
-  "first_name" -> col("gender").map {
-    case "M" => MaleFirstName.anonymize
-    case "F" => FemaleFirstName.anonymize
-    case _   => FirstName.anonymize
-  }
-)
-
-// Two column dependencies
-val transformer = table(
-  "state" -> using(StateAbbr.anonymize),
-  "city"  -> using(City.anonymize),
-  "full_address" -> col("state").and(col("city")).map { (state, city) =>
-    addr => s"$city, $state"
-  }
-)
+val spec = TableSpec.select { row =>
+  Seq(
+    row.email.mapOptString {
+      case None    => Some("default@example.com")  // Replace null with default
+      case Some(e) => Some(Anonymizer.Email(e))     // Anonymize non-null
+    }
+  )
+}
 ```
 
 ## Deterministic Guarantees
@@ -346,30 +305,21 @@ This is particularly important when anonymizing databases where the same email o
 
 ## Validation
 
-`TableTransformer` provides validation to ensure all columns are covered:
+`TableSpec` provides validation to ensure all columns are covered:
 
 ```scala
-val transformer = table(
-  "first" -> using(FirstName.anonymize),
-  "last"  -> using(LastName.anonymize)
-)
+val spec = TableSpec.select { row =>
+  Seq(
+    row.first.mapString(Anonymizer.FirstName),
+    row.last.mapString(Anonymizer.LastName)
+  )
+}
 
 val expectedColumns = Set("first", "last", "email")
 
-transformer.validateCovers(expectedColumns) match {
+spec.validateCovers(expectedColumns) match {
   case Left(missing) => println(s"Missing columns: $missing") // Set("email")
   case Right(())     => println("All columns covered")
-}
-```
-
-Database-level validation:
-
-```scala
-for {
-  result <- sourceDb.run(validateTransformerCoverage("users", transformer))
-} yield result match {
-  case Left(missing) => println(s"Missing non-PK/FK columns: $missing")
-  case Right(())     => println("All data columns covered")
 }
 ```
 
@@ -377,47 +327,47 @@ for {
 
 ```
 simpleanonymizer/
-├── DeterministicAnonymizer.scala  — Anonymization functions using DataFaker
-│   ├── Sealed Anonymizer trait (String => String fakers)
+├── Anonymizer.scala               — Anonymization functions using DataFaker
+│   ├── Anonymizer trait (extends String => String)
 │   ├── Hash-based deterministic selection
 │   └── Pre-fetched data lists for performance
 │
-├── RowTransformer.scala           — Composable transformer DSL
-│   ├── ResultKind                 — Describes transformation output type
-│   │   ├── UseOriginal           — Preserves database type (passthrough)
-│   │   ├── SetNull               — Insert null
-│   │   ├── UseFixed(value)       — Fixed value of any type
-│   │   └── TransformString(f)    — String transformation
-│   ├── ValueTransformer           — Leaf-level transformations
-│   ├── JsonNav                    — JSON navigation (Direct, Field, ArrayOf)
-│   ├── ColumnSpec                 — Column specification with dependencies
-│   ├── TableTransformer           — Composes column specs
-│   └── DSL                        — User-facing API
+├── Lens.scala                     — JSON navigation
+│   └── Lens                       — Direct, Field, ArrayElements
 │
-├── DbSnapshot.scala               — Database operations (Slick-based)
-│   ├── getAllTables               — List tables in schema
-│   ├── getTableColumns            — List columns in table
-│   ├── getDataColumns             — List non-PK/FK columns
-│   ├── getPrimaryKeyColumns       — Get PK columns
-│   ├── getForeignKeyColumns       — Get FK columns
-│   ├── getForeignKeys             — Get all FK relationships
-│   ├── validateTransformerCoverage— Validate column coverage
-│   ├── generateTableSnippet       — Code snippet for error messages
+├── OutputColumn.scala             — Column output specifications
+│   ├── SourceColumn               — Passthrough (preserves type)
+│   ├── TransformedColumn          — String transformation (null-preserving)
+│   └── FixedColumn                — Fixed value of any type
+│
+├── TableSpec.scala                — Table specification & DSL entry point
+│   ├── TableSpec.select { row => Seq(...) } — Entry point (returns TableSpec)
+│   ├── columns: Seq[OutputColumn] — Column transformations
+│   ├── whereClause: Option[String] — Optional filter
+│   └── validateCovers             — Column coverage validation
+│
+├── TableCopier.scala              — Low-level table copy operations
 │   └── copyTable                  — Copy with optional transformation
 │
-├── Snapshot (class)               — High-level orchestrator
-│   └── copy                       — Copy all tables with FK ordering
-│                                    (enforces transformer coverage)
+├── DbCopier.scala                 — High-level orchestrator (Slick-based)
+│   └── run                        — Copy all tables with FK ordering
 │
-├── DependencyGraph.scala          — FK dependency analysis
-│   ├── computeTableLevels         — Topological sort by FK depth
-│   └── groupTablesByLevel         — Group tables for parallel copy
+├── CoverageValidator.scala        — Validation and error messages
+│   ├── getDataColumns             — List non-PK, non-FK columns
+│   ├── ensureAllColumns           — Validate all columns are covered
+│   └── ensureAllTables            — Validate all tables are handled
 │
-└── FilterPropagation.scala        — WHERE clause propagation
-    ├── TableConfig                — Per-table configuration
-    ├── TableSpec                  — Combined config + transformer
-    ├── generateChildWhereClause   — Derive child filter from parent
-    └── computeEffectiveFilters    — Propagate filters through FKs
+├── DbMetadata.scala               — Database schema introspection
+│   ├── getAllTables               — List tables in schema
+│   └── getAllForeignKeys          — Get all FK relationships
+│
+├── TableSorter.scala              — FK-based table ordering
+│   └── apply(tables, fks)         — Returns tables grouped by dependency level
+│
+├── FilterPropagation.scala        — WHERE clause propagation
+│   └── computeEffectiveFilters    — Propagate filters through FKs
+│
+└── SlickProfile.scala             — PostgreSQL profile with slick-pg
 ```
 
 ## License
