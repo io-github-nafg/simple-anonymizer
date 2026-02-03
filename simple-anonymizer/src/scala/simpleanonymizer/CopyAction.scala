@@ -40,8 +40,19 @@ private[simpleanonymizer] class CopyAction(
 
   private implicit val getRowResult: GetResult[RawRow] = GetResult { r =>
     val objectsAndStrings = tableSpec.columnNames.map { col =>
-      val obj = r.nextObject()
-      val str = if (obj == null) null else obj.toString
+      val rawObj = r.nextObject()
+      // PgArray holds a reference to the source JDBC connection. After streaming ends, that
+      // connection may be closed, causing "This connection has been closed" in flush().
+      // Convert to PGobject (no connection reference) while the connection is still alive.
+      val obj    = rawObj match {
+        case arr: java.sql.Array =>
+          val pgObj = new PGobject()
+          pgObj.setType(arr.getBaseTypeName + "[]")
+          pgObj.setValue(rawObj.toString)
+          pgObj
+        case other               => other
+      }
+      val str    = if (rawObj == null) null else rawObj.toString
       (col, obj, str)
     }
     RawRow(
