@@ -17,9 +17,7 @@ class DbMetadata(schema: String)(implicit executionContext: ExecutionContext) {
 
   /** Get all foreign key relationships from the database */
   def getAllForeignKeys: DBIO[Seq[MForeignKey]] =
-    MTable.getTables(None, Some(schema), None, Some(Seq("TABLE"))).flatMap { tables =>
-      DBIO.traverse(tables)(_.getImportedKeys).map(_.flatten)
-    }
+    MForeignKey.getImportedKeys(MQName(None, Some(schema), null))
 
   /** Get all column names for all tables in the schema, grouped by table name. */
   def getAllColumns: DBIO[Map[String, Seq[String]]] =
