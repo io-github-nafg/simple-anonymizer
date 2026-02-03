@@ -22,22 +22,29 @@ object CoverageValidator {
   /** List columns that need explicit handling in a [[TableSpec]] when used with [[DbCopier]].
     *
     * PK and FK columns are excluded because [[DbCopier]] passes them through automatically.
+    *
+    * @param fkColumnsByTable
+    *   FK column names per table, pre-computed from the already-fetched global FK data.
     */
-  def getDataColumns(table: MQName)(implicit ec: ExecutionContext): DBIO[Seq[String]] =
+  def getDataColumns(table: MQName, fkColumnsByTable: Map[String, Set[String]])(implicit ec: ExecutionContext): DBIO[Seq[String]] =
     for {
       columns   <- MColumn.getColumns(table, "%")
       pkColumns <- MPrimaryKey.getPrimaryKeys(table)
-      fkColumns <- MForeignKey.getImportedKeys(table)
     } yield {
       val pkColumnNames = pkColumns.map(_.column).toSet
-      val fkColumnNames = fkColumns.map(_.fkColumn).toSet
+      val fkColumnNames = fkColumnsByTable.getOrElse(table.name, Set.empty)
       columns.map(_.name).filterNot(c => pkColumnNames.contains(c) || fkColumnNames.contains(c))
     }
 
-  def ensureAllColumns(tableSpecs: Map[String, TableSpec], mtableMap: Map[String, MQName])(implicit ec: ExecutionContext): DBIO[Unit] =
+  def fkColumnsByTable(allFks: Seq[MForeignKey]): Map[String, Set[String]] =
+    allFks.groupBy(_.fkTable.name).map { case (table, fks) => table -> fks.map(_.fkColumn).toSet }
+
+  def ensureAllColumns(tableSpecs: Map[String, TableSpec], mtableMap: Map[String, MQName], fkColumnsByTable: Map[String, Set[String]])(implicit
+      ec: ExecutionContext
+  ): DBIO[Unit] =
     DBIO
       .traverse(tableSpecs.toSeq) { case (tableName, spec) =>
-        getDataColumns(mtableMap(tableName))
+        getDataColumns(mtableMap(tableName), fkColumnsByTable)
           .map(cols => tableName -> spec.validateCovers(cols.toSet))
       }
       .flatMap { results =>
@@ -60,7 +67,9 @@ object CoverageValidator {
         }
       }
 
-  def ensureAllTables(tables: Seq[MQName], skippedTables: Set[String], copiedTables: Set[String])(implicit ec: ExecutionContext): DBIO[Unit] = {
+  def ensureAllTables(tables: Seq[MQName], skippedTables: Set[String], copiedTables: Set[String], fkColumnsByTable: Map[String, Set[String]])(implicit
+      ec: ExecutionContext
+  ): DBIO[Unit] = {
     val requiredTables = tables.filterNot(t => skippedTables.contains(t.name))
     val missingTables  = requiredTables.filterNot(t => copiedTables.contains(t.name))
 
@@ -69,7 +78,7 @@ object CoverageValidator {
     else
       DBIO
         .traverse(missingTables) { table =>
-          getDataColumns(table).map(table -> _)
+          getDataColumns(table, fkColumnsByTable).map(table -> _)
         }
         .flatMap { tableColumns =>
           val snippets = tableColumns.map { case (table, cols) => generateTableSnippet(table.name, cols) }
