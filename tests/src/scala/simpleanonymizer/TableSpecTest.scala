@@ -133,7 +133,7 @@ class TableSpecTest extends AnyFunSpec with TypeCheckedTripleEquals {
         ),
         whereClause = None
       )
-      assert(spec.outputColumns === Set("a", "b", "c"))
+      assert(spec.columnNames === Seq("a", "b", "c"))
     }
   }
 }

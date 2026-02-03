@@ -33,7 +33,9 @@ libraryDependencies += "io.github.nafg.simple-anonymizer" %% "simple-anonymizer"
 ```scala
 import simpleanonymizer.{Anonymizer, TableSpec}
 
-// Define a table spec with transformations
+// Define a table spec with transformations.
+// PK and FK columns (e.g., id, user_id) are passed through automatically by DbCopier
+// and don't need to be listed here — only non-PK/non-FK columns are required.
 val personSpec = TableSpec.select { row =>
   Seq(
     row.first_name.mapString(Anonymizer.FirstName),
@@ -59,6 +61,8 @@ val copier = new DbCopier(sourceDb, targetDb)
 
 for {
   result <- copier.run(
+    // Only non-PK/non-FK columns need to be listed.
+    // PK (id) and FK (user_id) columns are copied automatically.
     "users"    -> TableSpec.select { row =>
       Seq(
         row.first_name.mapString(Anonymizer.FirstName),
@@ -82,7 +86,9 @@ for {
 `DbCopier` automatically:
 - Sorts tables by FK dependencies so parent rows exist before child rows
 - Propagates WHERE clauses through FKs (e.g., filtering `users` also filters `orders` referencing those users)
-- Validates that every table and every non-PK/non-FK column is handled
+- Passes through PK and FK columns as-is — only non-PK/non-FK columns need to be in the spec (you _can_ include PK/FK columns to override the passthrough, e.g., to transform them)
+- Validates that every table and every non-PK/non-FK column is covered, with copy-pastable code snippets on failure
+- Defers self-referencing FK constraints automatically (requires PostgreSQL 9.4+)
 
 ### Skipping Tables
 

@@ -19,7 +19,10 @@ object CoverageValidator {
   def generateColumnSnippets(columns: Set[String]): String =
     columns.toSeq.sorted.map(col => s"row.$col").mkString(",\n      ")
 
-  /** List columns that need transformers (non-PK, non-FK columns). */
+  /** List columns that need explicit handling in a [[TableSpec]] when used with [[DbCopier]].
+    *
+    * PK and FK columns are excluded because [[DbCopier]] passes them through automatically.
+    */
   def getDataColumns(table: MQName)(implicit ec: ExecutionContext): DBIO[Seq[String]] =
     for {
       columns   <- MColumn.getColumns(table, "%")

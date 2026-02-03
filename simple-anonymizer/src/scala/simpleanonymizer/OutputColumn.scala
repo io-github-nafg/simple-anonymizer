@@ -6,7 +6,7 @@ import scala.language.dynamics
 trait OutputColumn {
   def name: String
 
-  private[simpleanonymizer] def transform(wrapIfJson: AnyRef => AnyRef): RawRow => AnyRef
+  private[simpleanonymizer] def lift(wrapIfJson: AnyRef => AnyRef): RawRow => AnyRef
 }
 
 object OutputColumn {
@@ -51,13 +51,13 @@ object OutputColumn {
     /** Set this column to a fixed value */
     def :=[A](value: A): FixedColumn = FixedColumn(name, value)
 
-    override private[simpleanonymizer] def transform(wrapIfJson: AnyRef => AnyRef): RawRow => AnyRef =
+    override private[simpleanonymizer] def lift(wrapIfJson: AnyRef => AnyRef): RawRow => AnyRef =
       rawRow => wrapIfJson(rawRow.objects.getOrElse(name, null))
   }
 
   /** A transformed column with a function applied */
   case class TransformedColumn(name: String, lens: Lens, f: RawRow => Option[String] => Option[String]) extends OutputColumn {
-    override private[simpleanonymizer] def transform(wrapIfJson: AnyRef => AnyRef): RawRow => AnyRef = { rawRow =>
+    override private[simpleanonymizer] def lift(wrapIfJson: AnyRef => AnyRef): RawRow => AnyRef = { rawRow =>
       val str         = rawRow.strings.get(name).filter(_ != null)
       val f0          = lens.modifyOpt(f(rawRow))
       val transformed = f0(str)
@@ -70,7 +70,7 @@ object OutputColumn {
 
   /** A column set to a fixed value */
   case class FixedColumn(name: String, value: Any) extends OutputColumn {
-    override private[simpleanonymizer] def transform(wrapIfJson: AnyRef => AnyRef): RawRow => AnyRef = {
+    override private[simpleanonymizer] def lift(wrapIfJson: AnyRef => AnyRef): RawRow => AnyRef = {
       val wrappedValue = wrapIfJson(value.asInstanceOf[AnyRef])
       _ => wrappedValue
     }

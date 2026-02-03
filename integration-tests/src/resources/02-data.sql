@@ -12,17 +12,55 @@ INSERT INTO users (first_name, last_name, email) VALUES
     ('Christopher', 'Moore', 'cmoore@sample.org'),
     ('Amanda', 'Taylor', 'amanda.taylor@mail.com');
 
+-- Children reference parents with higher IDs to exercise self-referencing FK handling.
+-- Physical row order puts children before parents to trigger FK violations across batches.
 INSERT INTO categories (id, name, parent_id) VALUES
+    (4, 'Smartphones', NULL),
+    (5, 'Laptops', NULL),
+    (6, 'Tablets', NULL),
+    (7, 'Mens Clothing', NULL),
+    (8, 'Womens Clothing', NULL),
+    (9, 'Fiction', NULL),
+    (10, 'Non-Fiction', NULL),
     (1, 'Electronics', NULL),
     (2, 'Clothing', NULL),
-    (3, 'Books', NULL),
-    (4, 'Smartphones', 1),
-    (5, 'Laptops', 1),
-    (6, 'Tablets', 1),
-    (7, 'Mens Clothing', 2),
-    (8, 'Womens Clothing', 2),
-    (9, 'Fiction', 3),
-    (10, 'Non-Fiction', 3);
+    (3, 'Books', NULL);
+UPDATE categories SET parent_id = 1 WHERE id = 4;
+UPDATE categories SET parent_id = 1 WHERE id = 5;
+UPDATE categories SET parent_id = 1 WHERE id = 6;
+UPDATE categories SET parent_id = 2 WHERE id = 7;
+UPDATE categories SET parent_id = 2 WHERE id = 8;
+UPDATE categories SET parent_id = 3 WHERE id = 9;
+UPDATE categories SET parent_id = 3 WHERE id = 10;
+UPDATE categories SET parent_id = NULL WHERE id IN (1, 2, 3);
+
+-- Employees with two self-referencing FKs (manager_id and mentor_id).
+-- Physical row order puts subordinates before their managers/mentors.
+INSERT INTO employees (id, name, manager_id, mentor_id) VALUES
+    (4, 'Alice', NULL, NULL),
+    (5, 'Bob', NULL, NULL),
+    (6, 'Carol', NULL, NULL),
+    (1, 'CEO', NULL, NULL),
+    (2, 'VP Engineering', NULL, NULL),
+    (3, 'VP Sales', NULL, NULL);
+UPDATE employees SET manager_id = 1, mentor_id = 2 WHERE id = 4;
+UPDATE employees SET manager_id = 1, mentor_id = 3 WHERE id = 5;
+UPDATE employees SET manager_id = 2, mentor_id = 1 WHERE id = 6;
+
+-- Composite-PK self-referencing FK (tree_nodes).
+-- Children reference parents via (parent_group_id, parent_position) -> (group_id, position).
+-- Physical row order puts children before parents.
+INSERT INTO tree_nodes (group_id, position, label, parent_group_id, parent_position) VALUES
+    (1, 2, 'Child A', NULL, NULL),
+    (1, 3, 'Child B', NULL, NULL),
+    (2, 1, 'Leaf X', NULL, NULL),
+    (2, 2, 'Leaf Y', NULL, NULL),
+    (1, 1, 'Root', NULL, NULL),
+    (2, 3, 'Branch', NULL, NULL);
+UPDATE tree_nodes SET parent_group_id = 1, parent_position = 1 WHERE group_id = 1 AND position = 2;
+UPDATE tree_nodes SET parent_group_id = 1, parent_position = 1 WHERE group_id = 1 AND position = 3;
+UPDATE tree_nodes SET parent_group_id = 2, parent_position = 3 WHERE group_id = 2 AND position = 1;
+UPDATE tree_nodes SET parent_group_id = 2, parent_position = 3 WHERE group_id = 2 AND position = 2;
 
 INSERT INTO orders (user_id, total, status) VALUES
     (1, 299.99, 'completed'),

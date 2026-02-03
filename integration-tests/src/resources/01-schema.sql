@@ -27,6 +27,23 @@ CREATE TABLE IF NOT EXISTS categories (
     parent_id INTEGER REFERENCES categories(id)
 );
 
+CREATE TABLE IF NOT EXISTS employees (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100),
+    manager_id INTEGER REFERENCES employees(id),
+    mentor_id INTEGER REFERENCES employees(id)
+);
+
+CREATE TABLE IF NOT EXISTS tree_nodes (
+    group_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    label VARCHAR(100),
+    parent_group_id INTEGER,
+    parent_position INTEGER,
+    PRIMARY KEY (group_id, position),
+    FOREIGN KEY (parent_group_id, parent_position) REFERENCES tree_nodes(group_id, position)
+);
+
 CREATE TABLE IF NOT EXISTS profiles (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id),
