@@ -32,20 +32,28 @@ case class TableCopier(
     batchSize: Int = 1000
 )(implicit ec: ExecutionContext) {
 
-  /** Get column types for a table using raw SQL */
+  /** Get column types for a table using raw SQL, validating that all spec columns exist in the source. */
   private def columnTypesFut: Future[Seq[(OutputColumn, String)]] =
-    sourceDb.run(
-      sql"""
-      SELECT column_name, data_type
-      FROM information_schema.columns
-      WHERE table_schema = $schema AND table_name = $tableName
-    """
-        .as[(String, String)]
-        .map { colTypes =>
-          val typeMap = colTypes.toMap
-          tableSpec.columns.map(c => c -> typeMap.getOrElse(c.name, "unknown"))
-        }
-    )
+    sourceDb
+      .run(
+        sql"""
+          SELECT column_name, data_type
+          FROM information_schema.columns
+          WHERE table_schema = $schema AND table_name = $tableName
+        """.as[(String, String)]
+      )
+      .flatMap { colTypes =>
+        val typeMap        = colTypes.toMap
+        val missingColumns = tableSpec.columnNames.filterNot(typeMap.contains)
+        if (missingColumns.nonEmpty)
+          Future.failed(
+            new IllegalArgumentException(
+              s"Table '$tableName' spec references columns that do not exist in the source database: ${missingColumns.mkString(", ")}"
+            )
+          )
+        else
+          Future.successful(tableSpec.columns.map(c => c -> typeMap(c.name)))
+      }
 
   private val selfRefConstraints = new SelfRefConstraints(targetDb, schema, tableName)
 
