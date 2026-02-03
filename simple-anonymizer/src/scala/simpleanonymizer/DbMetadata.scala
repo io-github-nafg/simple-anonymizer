@@ -30,11 +30,12 @@ class DbMetadata(schema: String)(implicit executionContext: ExecutionContext) {
   /** Get all primary key column names for all tables in the schema, grouped by table name. */
   def getAllPrimaryKeys: DBIO[Map[String, Set[String]]] =
     sql"""
-      SELECT kcu.table_name, kcu.column_name
-      FROM information_schema.table_constraints tc
-      JOIN information_schema.key_column_usage kcu
-        ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-      WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = $schema
+      SELECT c.relname, a.attname
+      FROM pg_index i
+      JOIN pg_class c ON c.oid = i.indrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+      WHERE i.indisprimary AND n.nspname = $schema
     """
       .as[(String, String)]
       .map(_.groupBy(_._1).map { case (table, cols) => table -> cols.map(_._2).toSet })
