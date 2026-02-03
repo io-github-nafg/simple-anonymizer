@@ -64,7 +64,10 @@ private[simpleanonymizer] class CopyAction(
 
     println(s"[TableCopier] SELECT: $selectSql")
 
-    val inserter = new CopyAction.BatchInserter(quotedTable, columns, batchSize, context.connection)
+    val totalRows = Await.result(sourceDb.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head), Duration.Inf)
+    println(s"[TableCopier] Copying table: $quotedTable ($totalRows rows)")
+
+    val inserter = new CopyAction.BatchInserter(quotedTable, columns, batchSize, totalRows, context.connection)
 
     Await.result(
       sourceDb
@@ -101,6 +104,7 @@ object CopyAction {
       quotedTable: String,
       columns: Seq[(OutputColumn, String)],
       batchSize: Int,
+      totalRows: Int,
       conn: Connection
   ) {
     private val buffer      = new ArrayBuffer[RawRow](batchSize)
@@ -150,7 +154,7 @@ object CopyAction {
         buffer.clear()
         val now = System.currentTimeMillis()
         if (now - lastLogTime >= 5000) {
-          println(s"[TableCopier] Inserted $count rows into $quotedTable...")
+          println(s"[TableCopier] Inserted $count/$totalRows rows into $quotedTable...")
           lastLogTime = now
         }
       }
@@ -160,7 +164,7 @@ object CopyAction {
     def flush(): Int = {
       if (buffer.nonEmpty)
         count += insertBatch(buffer.toVector)
-      println(s"[TableCopier] Copied $count rows from $quotedTable")
+      println(s"[TableCopier] Copied $count/$totalRows rows from $quotedTable")
       count
     }
   }

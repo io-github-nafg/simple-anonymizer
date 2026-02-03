@@ -58,8 +58,6 @@ case class TableCopier(
   private val selfRefConstraints = new SelfRefConstraints(targetDb, schema, tableName)
 
   def run: Future[Int] = {
-    println(s"[TableCopier] Copying table: $tableName")
-
     val transformedColumns = tableSpec.columns.collect { case c if !c.isInstanceOf[OutputColumn.SourceColumn] => c.name }
     if (transformedColumns.nonEmpty)
       println(s"[TableCopier] Transforming columns of $tableName: ${transformedColumns.mkString(", ")}")
