@@ -8,24 +8,21 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
 
   protected val schema: String = "public"
 
-  protected lazy val sourceContainer    = PostgresTestBase.createContainer()
-  protected lazy val sourceDb: Database = sourceContainer.slickDatabase(SlickProfile.backend)
+  protected lazy val sourceDb: Database =
+    PostgresTestBase.sourceContainer.slickDatabase(SlickProfile.backend)
 
-  override def beforeAll(): Unit = sourceContainer.start()
-  override def afterAll(): Unit  = sourceContainer.stop()
+  override def afterAll(): Unit = sourceDb.close()
 
   type FixtureParam = Database
 
   override def withFixture(test: OneArgAsyncTest): FutureOutcome = {
-    val targetContainer = PostgresTestBase.createEmptyContainer()
-    targetContainer.start()
-    val targetDb        = targetContainer.slickDatabase(SlickProfile.backend)
+    val (targetDb, dbName) = PostgresTestBase.createTargetDb()
 
     complete {
       withFixture(test.toNoArgAsyncTest(targetDb))
     }.lastly {
       try targetDb.close()
-      finally targetContainer.stop()
+      finally PostgresTestBase.dropTargetDb(dbName)
     }
   }
 
@@ -232,6 +229,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
         )"""
 
       for {
+        _ <- sourceDb.run(sqlu"""DROP TABLE IF EXISTS "#$maliciousTableName"""")
         _ <- sourceDb.run(createTableSql)
         _ <- sourceDb.run(
                sqlu"""INSERT INTO "#$maliciousTableName" ("#$maliciousColumnName") VALUES ('test data 1'), ('test data 2')"""

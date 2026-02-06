@@ -12,24 +12,20 @@ import SlickProfile.api._
   */
 class DbCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll {
 
-  private lazy val sourceContainer = PostgresTestBase.createContainer()
-  private lazy val sourceDb        = sourceContainer.slickDatabase(SlickProfile.backend)
+  private lazy val sourceDb = PostgresTestBase.sourceContainer.slickDatabase(SlickProfile.backend)
 
-  override def beforeAll(): Unit = sourceContainer.start()
-  override def afterAll(): Unit  = sourceContainer.stop()
+  override def afterAll(): Unit = sourceDb.close()
 
   case class FixtureParam(targetDb: Database)
 
   override def withFixture(test: OneArgAsyncTest): FutureOutcome = {
-    val targetContainer = PostgresTestBase.createEmptyContainer()
-    targetContainer.start()
-    val targetDb        = targetContainer.slickDatabase(SlickProfile.backend)
+    val (targetDb, dbName) = PostgresTestBase.createTargetDb()
 
     complete {
       withFixture(test.toNoArgAsyncTest(FixtureParam(targetDb)))
     }.lastly {
       try targetDb.close()
-      finally targetContainer.stop()
+      finally PostgresTestBase.dropTargetDb(dbName)
     }
   }
 
