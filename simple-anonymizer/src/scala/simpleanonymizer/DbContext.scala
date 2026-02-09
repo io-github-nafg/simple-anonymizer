@@ -6,41 +6,41 @@ import slick.jdbc.meta.{MColumn, MForeignKey, MQName, MTable}
 
 import scala.concurrent.{ExecutionContext, Future}
 
-/** Lazily-caching schema metadata.
+/** A Slick database paired with lazily-cached schema metadata.
   *
-  * Each getter triggers a bulk fetch on first access (fetching data for all tables in the schema at once), then caches the result. Subsequent calls return the
-  * cached value. This avoids N+1 queries when multiple tables need metadata.
+  * Wraps a Slick `Database` and schema name, providing lazy accessors for tables, columns, foreign keys, and primary keys. Each accessor triggers a bulk fetch
+  * on the first access (for all tables in the schema), then caches the result. This avoids N+1 queries when multiple tables need metadata.
   *
   * Both [[DbCopier]] and [[TableCopier]] can share the same instance. When used with `DbCopier`, the instance is created once and shared. When `TableCopier` is
   * used standalone, it creates its own instance (or accepts one via constructor parameter).
   */
-class DbMetadata(db: Database, schema: String)(implicit ec: ExecutionContext) {
+class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionContext) {
 
   /** All tables in the schema, sorted by name. */
   lazy val allTables: Future[Seq[MTable]] = {
-    println("[DbMetadata] Fetching tables...")
+    println("[DbContext] Fetching tables...")
     db.run(
       MTable.getTables(None, Some(schema), None, Some(Seq("TABLE"))).map(_.sortBy(_.name.name))
     ).map { tables =>
-      println(s"[DbMetadata] Found ${tables.size} tables.")
+      println(s"[DbContext] Found ${tables.size} tables.")
       tables
     }
   }
 
   /** All foreign key relationships in the schema. */
   lazy val allForeignKeys: Future[Seq[MForeignKey]] = {
-    println("[DbMetadata] Fetching foreign keys...")
+    println("[DbContext] Fetching foreign keys...")
     db.run(
       MForeignKey.getImportedKeys(MQName(None, Some(schema), null))
     ).map { fks =>
-      println(s"[DbMetadata] Found ${fks.size} foreign keys.")
+      println(s"[DbContext] Found ${fks.size} foreign keys.")
       fks
     }
   }
 
   /** All column names grouped by table name. */
   lazy val allColumns: Future[Map[String, Seq[String]]] = {
-    println("[DbMetadata] Fetching columns...")
+    println("[DbContext] Fetching columns...")
     db.run(
       MColumn.getColumns(MQName(None, Some(schema), "%"), "%").map { columns =>
         columns.groupBy(_.table.name).map { case (table, cols) => table -> cols.map(_.name) }
@@ -50,7 +50,7 @@ class DbMetadata(db: Database, schema: String)(implicit ec: ExecutionContext) {
 
   /** All primary key column names grouped by table name. */
   lazy val allPrimaryKeys: Future[Map[String, Set[String]]] = {
-    println("[DbMetadata] Fetching primary keys...")
+    println("[DbContext] Fetching primary keys...")
     db.run(
       sql"""
         SELECT c.relname, a.attname

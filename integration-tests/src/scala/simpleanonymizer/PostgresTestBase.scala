@@ -81,9 +81,7 @@ object PostgresTestBase {
 
 /** Base trait for integration tests that need a PostgreSQL container with schema and test data. */
 trait PostgresTestBase extends AsyncFunSpec with BeforeAndAfterAll {
-  protected lazy val db: Database = PostgresTestBase.sourceContainer.slickDatabase(SlickProfile.backend)
+  protected lazy val dbContext = new DbContext(PostgresTestBase.sourceContainer.slickDatabase(SlickProfile.backend), "public")
 
-  protected lazy val dbMetadata: DbMetadata = new DbMetadata(db, "public")
-
-  override def afterAll(): Unit = db.close()
+  override def afterAll(): Unit = dbContext.db.close()
 }

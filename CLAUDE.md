@@ -28,7 +28,7 @@ bleep publish -- --mode=local  # Publish to local Ivy repository
 ### Data Flow
 
 `DbCopier.run()` orchestrates the full pipeline:
-1. `DbMetadata` introspects source schema (tables, FKs)
+1. `DbContext` introspects source schema (tables, FKs)
 2. `TableSorter` topologically sorts tables by FK dependencies into levels
 3. `FilterPropagation` propagates WHERE clauses from parent to child tables via FK-based IN subqueries
 4. `CoverageValidator` ensures all tables and non-PK/non-FK columns have specs

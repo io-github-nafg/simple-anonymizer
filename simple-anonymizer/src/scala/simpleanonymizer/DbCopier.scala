@@ -45,7 +45,7 @@ import scala.concurrent.{ExecutionContext, Future}
   */
 class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public", skippedTables: Set[String] = Set.empty)(implicit ec: ExecutionContext) {
 
-  private val metadata = new DbMetadata(sourceDb, schema)
+  private val sourceDbContext = new DbContext(sourceDb, schema)
 
   private def copyTablesInOrder(
       tables: Seq[MTable],
@@ -65,7 +65,7 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
             copyNext(rest, acc + (tableName -> 0))
           } else
             for {
-              allColumnNames <- sourceDb.run(table.getColumns.map(_.map(_.name)))
+              allColumnNames <- sourceDbContext.db.run(table.getColumns.map(_.map(_.name)))
               tableSpec       = specs.getOrElse(tableName, TableSpec(Seq.empty))
               // Merge user-specified output columns with passthrough for any remaining columns
               fullTableSpec   = TableSpec(
@@ -80,9 +80,8 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
                                   batchSize = tableSpec.batchSize
                                 )
               tableCopier     = new TableCopier(
-                                  sourceDb = sourceDb,
+                                  source = sourceDbContext,
                                   targetDb = targetDb,
-                                  schema = schema,
                                   tableName = tableName,
                                   tableSpec = fullTableSpec
                                 )
@@ -113,11 +112,11 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
   def run(tableSpecs: (String, TableSpec)*): Future[Map[String, Int]] = {
     val tableSpecsMap = tableSpecs.toMap
 
-    val validator = CoverageValidator(metadata)
+    val validator = CoverageValidator(sourceDbContext)
 
     for {
-      tables       <- metadata.allTables
-      fks          <- metadata.allForeignKeys
+      tables       <- sourceDbContext.allTables
+      fks          <- sourceDbContext.allForeignKeys
       orderedTables = TableSorter(tables, fks).flatten
       filters       = FilterPropagation.computeEffectiveFilters(orderedTables.map(_.name.name), fks, tableSpecsMap)
       _            <- validator.validate(tables.map(_.name.name), skippedTables, tableSpecsMap)

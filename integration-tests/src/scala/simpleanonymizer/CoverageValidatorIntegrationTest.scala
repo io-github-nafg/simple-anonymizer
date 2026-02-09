@@ -1,7 +1,7 @@
 package simpleanonymizer
 
 class CoverageValidatorIntegrationTest extends PostgresTestBase {
-  private lazy val validator: CoverageValidator = CoverageValidator(dbMetadata)
+  private lazy val validator: CoverageValidator = CoverageValidator(dbContext)
 
   describe("getDataColumns") {
     it("returns non-PK, non-FK columns") {

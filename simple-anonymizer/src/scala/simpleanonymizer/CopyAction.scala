@@ -25,14 +25,16 @@ import simpleanonymizer.SlickProfile.quoteIdentifier
   *   Ordered (output column, database type) pairs — used for both SELECT column ordering and INSERT parameter binding with JSON wrapping.
   */
 private[simpleanonymizer] class CopyAction(
-    sourceDb: Database,
-    quotedTableName: String,
+    dbContext: DbContext,
+    tableName: String,
     tableSpec: TableSpec,
     columns: Seq[(OutputColumn, String)]
 )(implicit executionContext: ExecutionContext)
     extends SynchronousDatabaseAction[Int, NoStream, JdbcBackend#JdbcActionContext, JdbcBackend#JdbcStreamingActionContext, Effect.All] {
 
   override type StreamState = Null
+
+  private val quotedTableName = quoteIdentifier(tableName)
 
   override def getDumpInfo = DumpInfo(name = "CopyAction", mainInfo = quotedTableName)
 
@@ -75,13 +77,13 @@ private[simpleanonymizer] class CopyAction(
 
     println(s"[TableCopier] SELECT: $selectSql")
 
-    val totalRows = Await.result(sourceDb.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head), Duration.Inf)
-    println(s"[TableCopier] Copying table: $quotedTableName ($totalRows rows)")
+    val totalRows = Await.result(dbContext.db.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head), Duration.Inf)
+    println(s"[TableCopier] Copying table: $tableName ($totalRows rows)")
 
     val inserter = new CopyAction.BatchInserter(quotedTableName, columns, batchSize, totalRows, context.connection)
 
     Await.result(
-      sourceDb
+      dbContext.db
         .stream(
           sql"#$selectSql"
             .as[RawRow]

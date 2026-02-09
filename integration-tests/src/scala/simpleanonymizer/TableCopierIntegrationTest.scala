@@ -6,10 +6,9 @@ import simpleanonymizer.SlickProfile.api._
 
 class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll {
 
-  protected val schema: String = "public"
+  protected lazy val sourceDb: Database = PostgresTestBase.sourceContainer.slickDatabase(SlickProfile.backend)
 
-  protected lazy val sourceDb: Database =
-    PostgresTestBase.sourceContainer.slickDatabase(SlickProfile.backend)
+  protected lazy val dbContext = new DbContext(sourceDb, "public")
 
   override def afterAll(): Unit = sourceDb.close()
 
@@ -28,9 +27,8 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
 
   private def copier(targetDb: Database, tableName: String, tableSpec: TableSpec) =
     new TableCopier(
-      sourceDb = sourceDb,
+      source = dbContext,
       targetDb = targetDb,
-      schema = schema,
       tableName = tableName,
       tableSpec = tableSpec
     )

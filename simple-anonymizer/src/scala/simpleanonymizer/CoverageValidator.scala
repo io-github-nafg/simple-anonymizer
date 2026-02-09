@@ -4,11 +4,11 @@ import slick.jdbc.meta.MForeignKey
 
 import scala.concurrent.{ExecutionContext, Future}
 
-class CoverageValidator private (metadata: DbMetadata)(implicit ec: ExecutionContext) {
+class CoverageValidator private (dbContext: DbContext)(implicit ec: ExecutionContext) {
   import CoverageValidator._
 
   private lazy val fkColumnsByTableFut: Future[Map[String, Set[String]]] =
-    metadata.allForeignKeys.map(fkColumnsByTable)
+    dbContext.allForeignKeys.map(fkColumnsByTable)
 
   /** List columns that need explicit handling in a [[TableSpec]] when used with [[DbCopier]].
     *
@@ -16,8 +16,8 @@ class CoverageValidator private (metadata: DbMetadata)(implicit ec: ExecutionCon
     */
   def getDataColumns(tableName: String): Future[Seq[String]] =
     for {
-      allColumns    <- metadata.allColumns
-      allPKs        <- metadata.allPrimaryKeys
+      allColumns    <- dbContext.allColumns
+      allPKs        <- dbContext.allPrimaryKeys
       fkColsByTable <- fkColumnsByTableFut
     } yield {
       val columns       = allColumns.getOrElse(tableName, Seq.empty)
@@ -107,6 +107,6 @@ object CoverageValidator {
   private def fkColumnsByTable(allFks: Seq[MForeignKey]): Map[String, Set[String]] =
     allFks.groupBy(_.fkTable.name).map { case (table, fks) => table -> fks.map(_.fkColumn).toSet }
 
-  def apply(metadata: DbMetadata)(implicit ec: ExecutionContext): CoverageValidator =
-    new CoverageValidator(metadata)
+  def apply(dbContext: DbContext)(implicit ec: ExecutionContext): CoverageValidator =
+    new CoverageValidator(dbContext)
 }

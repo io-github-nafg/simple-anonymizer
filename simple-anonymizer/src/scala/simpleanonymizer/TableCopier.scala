@@ -3,37 +3,36 @@ package simpleanonymizer
 import scala.concurrent.{ExecutionContext, Future}
 
 import simpleanonymizer.SlickProfile.api._
-import simpleanonymizer.SlickProfile.quoteIdentifier
 
 /** Copies a single table from source to target by streaming rows and inserting in batches.
   *
   * Self-referencing foreign keys are automatically detected and handled by temporarily deferring constraints during the copy transaction. Requires PostgreSQL
   * 9.4+.
   *
+  * @param source
+  *   Schema metadata for the source database. Used for column type lookups and resolving PK-based conflict targets (`upsertOnPk` / `skipConflictOnPk`).
   * @param tableSpec
   *   `columns` define <b>exactly</b> which columns are SELECTed from the source and INSERTed into target — there is no automatic passthrough. Every column that
   *   should appear in the INSERT must be listed, including PK and FK columns if the target table requires them. Columns with database defaults (SERIAL,
   *   nullable, DEFAULT) can be omitted. If a required column is missing, the INSERT will fail with a database error at runtime.
   *
-  * <b>Note:</b> [[DbCopier]] automatically adds passthrough columns for any database columns not in the spec (including PKs and FKs) before passing it to
-  * `TableCopier`.
+  * <b>Note:</b> [[DbCopier]] automatically adds passthrough columns for any database columns not in the spec (including PKs and FKs).
   */
 class TableCopier(
-    sourceDb: Database,
+    source: DbContext,
     targetDb: Database,
-    schema: String,
     tableName: String,
     tableSpec: TableSpec
 )(implicit ec: ExecutionContext) {
 
   /** Get column types for a table using raw SQL, validating that all spec columns exist in the source. */
   private def columnTypesFut: Future[Seq[(OutputColumn, String)]] =
-    sourceDb
+    source.db
       .run(
         sql"""
           SELECT column_name, data_type
           FROM information_schema.columns
-          WHERE table_schema = $schema AND table_name = $tableName
+          WHERE table_schema = ${source.schema} AND table_name = $tableName
         """.as[(String, String)]
       )
       .flatMap { colTypes =>
@@ -49,7 +48,7 @@ class TableCopier(
           Future.successful(tableSpec.columns.map(c => c -> typeMap(c.name)))
       }
 
-  private val selfRefConstraints = new SelfRefConstraints(targetDb, schema, tableName)
+  private val selfRefConstraints = new SelfRefConstraints(targetDb, source.schema, tableName)
 
   def run: Future[Int] = {
     val transformedColumns = tableSpec.columns.collect { case c if !c.isInstanceOf[OutputColumn.SourceColumn] => c.name }
@@ -61,8 +60,8 @@ class TableCopier(
         _           <- selfRefConstraints.deferAll(constraints.flatMap(_.fkName).distinct)
         columnTypes <- columnTypesFut
         copyAction   = new CopyAction(
-                         sourceDb = sourceDb,
-                         quotedTableName = quoteIdentifier(tableName),
+                         dbContext = source,
+                         tableName = tableName,
                          tableSpec = tableSpec,
                          columns = columnTypes
                        )
