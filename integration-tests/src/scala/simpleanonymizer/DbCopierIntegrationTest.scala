@@ -87,11 +87,6 @@ class DbCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll
                    },
                    "categories" -> TableSpec.select(row => Seq(row.name))
                  )
-        _     <- targetDb.run(
-                   sql"""SELECT first_name FROM users WHERE id IN (
-                      SELECT id FROM users ORDER BY id
-                   )""".as[String]
-                 )
         john1 <- targetDb.run(sql"SELECT first_name FROM users WHERE id = 1".as[String])
         _     <- assert(Anonymizer.FirstName("John") == john1.head)
       } yield succeed
