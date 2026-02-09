@@ -27,27 +27,27 @@ class CoverageValidator private (dbContext: DbContext)(implicit ec: ExecutionCon
     }
 
   private def ensureAllColumns(tableSpecs: Map[String, TableSpec]): Future[Unit] =
-    Future
-      .traverse(tableSpecs.toSeq) { case (tableName, spec) =>
-        getDataColumns(tableName).map(dataCols => tableName -> spec.validateCovers(dataCols.toSet))
+    dbContext.allColumns.flatMap { allColumns =>
+      val results  = tableSpecs.toSeq.map { case (tableName, spec) =>
+        val cols = allColumns.getOrElse(tableName, Seq.empty)
+        tableName -> spec.validateCovers(cols.toSet)
       }
-      .flatMap { results =>
-        val failures = results.collect { case (tableName, Left(missing)) => (tableName, missing) }
-        if (failures.isEmpty)
-          Future.unit
-        else {
-          val failureMessages = failures.map { case (tableName, missing) =>
-            s"""Table '$tableName' is missing ${missing.size} column(s). Add these:
-               |      ${generateColumnSnippets(missing)}""".stripMargin
-          }
-          val errorMsg        =
-            s"""Table specs are missing columns for ${failures.size} table(s).
-               |
-               |${failureMessages.mkString("\n\n")}
-               |""".stripMargin
-          Future.failed(new IllegalArgumentException(errorMsg))
+      val failures = results.collect { case (tableName, Left(missing)) => (tableName, missing) }
+      if (failures.isEmpty)
+        Future.unit
+      else {
+        val failureMessages = failures.map { case (tableName, missing) =>
+          s"""Table '$tableName' is missing ${missing.size} column(s). Add these:
+             |      ${generateColumnSnippets(missing)}""".stripMargin
         }
+        val errorMsg        =
+          s"""Table specs are missing columns for ${failures.size} table(s).
+             |
+             |${failureMessages.mkString("\n\n")}
+             |""".stripMargin
+        Future.failed(new IllegalArgumentException(errorMsg))
       }
+    }
 
   private def ensureAllTables(
       tableNames: Seq[String],
@@ -104,7 +104,7 @@ object CoverageValidator {
   def generateColumnSnippets(columns: Set[String]): String =
     columns.toSeq.sorted.map(col => s"row.$col").mkString(",\n      ")
 
-  private def fkColumnsByTable(allFks: Seq[MForeignKey]): Map[String, Set[String]] =
+  private[simpleanonymizer] def fkColumnsByTable(allFks: Seq[MForeignKey]): Map[String, Set[String]] =
     allFks.groupBy(_.fkTable.name).map { case (table, fks) => table -> fks.map(_.fkColumn).toSet }
 
   def apply(dbContext: DbContext)(implicit ec: ExecutionContext): CoverageValidator =
