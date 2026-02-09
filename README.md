@@ -11,6 +11,7 @@ A Scala library for creating anonymized copies of PostgreSQL databases for devel
 - **Database copying** — Copy tables between PostgreSQL databases with optional transformations
 - **FK-aware ordering** — Automatically determine correct table copy order based on foreign keys
 - **Filter propagation** — WHERE clauses on parent tables automatically propagate to child tables via FK subqueries
+- **Upsert support** — Handle pre-existing data with `ON CONFLICT DO UPDATE` or `DO NOTHING`
 - **Validation** — Fails with copy-pastable code snippets if you miss a table or column
 
 ## Installation
@@ -95,6 +96,38 @@ for {
 ```scala
 val copier = new DbCopier(sourceDb, targetDb, skippedTables = Set("audit_logs", "temp_data"))
 ```
+
+### Handling Existing Data (ON CONFLICT)
+
+By default, copying into a table that already has rows will fail on primary key conflicts. Use `onConflict` to control this behavior:
+
+```scala
+copier.run(
+  // Update existing rows with new values on PK conflict (auto-detected)
+  "users" -> TableSpec.select { row =>
+    Seq(row.first_name.mapString(Anonymizer.FirstName), row.last_name, row.email)
+  }.onConflict(OnConflict.doUpdate),
+
+  // Skip conflicting rows without error (auto-detected PK)
+  "categories" -> TableSpec.select(row => Seq(row.name))
+    .onConflict(OnConflict.doNothing),
+
+  // Explicit conflict target columns (required when using TableCopier directly)
+  "orders" -> TableSpec.select(row => Seq(row.status, row.total))
+    .onConflict(OnConflict.doUpdate("order_number")),
+
+  // Named constraint
+  "items" -> TableSpec.select(row => Seq(row.name, row.quantity))
+    .onConflict(OnConflict(OnConflict.ConflictTarget.Constraint("items_unique_name"), OnConflict.Action.DoNothing))
+)
+```
+
+| Factory Method | Conflict Target | Action |
+|----------------|-----------------|--------|
+| `OnConflict.doUpdate` | Primary key (auto-detected) | Update all non-PK columns |
+| `OnConflict.doNothing` | Primary key (auto-detected) | Skip conflicting rows |
+| `OnConflict.doUpdate("col1", "col2")` | Explicit columns | Update all non-conflict columns |
+| `OnConflict.doNothing("col1")` | Explicit columns | Skip conflicting rows |
 
 ### Validation
 
