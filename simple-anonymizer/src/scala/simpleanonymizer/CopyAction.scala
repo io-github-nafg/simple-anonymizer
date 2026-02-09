@@ -4,8 +4,7 @@ import java.sql.Connection
 
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext}
-
+import scala.concurrent.{Await, ExecutionContext, Future}
 import slick.dbio.SynchronousDatabaseAction
 import slick.jdbc.{GetResult, JdbcBackend}
 import slick.util.DumpInfo
@@ -80,21 +79,57 @@ private[simpleanonymizer] class CopyAction(
     val totalRows = Await.result(dbContext.db.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head), Duration.Inf)
     println(s"[TableCopier] Copying table: $tableName ($totalRows rows)")
 
-    val inserter = new CopyAction.BatchInserter(quotedTableName, columns, batchSize, totalRows, context.connection)
+    val insertSql = {
+      val columnList                                                              = columns.map(c => quoteIdentifier(c._1.name)).mkString(", ")
+      val columnNames                                                             = columns.map(_._1.name)
+      def onConflictActionClause(action: OnConflict.Action, strings: Seq[String]) =
+        action match {
+          case OnConflict.Action.DoNothing            => "DO NOTHING"
+          case OnConflict.Action.DoUpdate(updateCols) =>
+            "DO UPDATE SET " +
+              updateCols
+                .getOrElse(columnNames.toSet -- strings)
+                .map(c => s"${quoteIdentifier(c)} = EXCLUDED.${quoteIdentifier(c)}")
+                .mkString(", ")
+        }
+      def onConflictClause(onConflict: OnConflict)                                =
+        for {
+          cols          <- onConflict.target match {
+                             case OnConflict.ConflictTarget.Constraint(name) => Future.successful(Left(name))
+                             case OnConflict.ConflictTarget.Columns(cols)    => Future.successful(Right(cols))
+                             case OnConflict.ConflictTarget.PrimaryKey       =>
+                               dbContext.allPrimaryKeys.map(_.getOrElse(tableName, Set.empty).toSeq.sorted).map(Right(_))
+                           }
+          conflictTarget = cols match {
+                             case Left(constraint) => s"ON CONSTRAINT ${quoteIdentifier(constraint)}"
+                             case Right(cols)      => s"(${cols.map(quoteIdentifier).mkString(", ")})"
+                           }
+        } yield s" ON CONFLICT $conflictTarget ${onConflictActionClause(onConflict.action, cols.getOrElse(Seq.empty))}"
+      for {
+        onConflictStr <- tableSpec.onConflict match {
+                           case Some(value) => onConflictClause(value)
+                           case None        => Future.successful("")
+                         }
+        placeholders   = columns.map(_ => "?").mkString(", ")
+      } yield s"INSERT INTO $quotedTableName ($columnList) VALUES ($placeholders)$onConflictStr"
+    }
 
     Await.result(
-      dbContext.db
-        .stream(
-          sql"#$selectSql"
-            .as[RawRow]
-            .transactionally
-            .withStatementParameters(fetchSize = batchSize)
-        )
-        .foreach(inserter.receiveBatch),
+      for {
+        sql     <- insertSql
+        inserter = new CopyAction.BatchInserter(tableName, columns, sql, batchSize, totalRows, context.connection)
+        _       <-
+          dbContext.db
+            .stream(
+              sql"#$selectSql"
+                .as[RawRow]
+                .transactionally
+                .withStatementParameters(fetchSize = batchSize)
+            )
+            .foreach(inserter.receiveBatch)
+      } yield inserter.flush(),
       Duration.Inf
     )
-
-    inserter.flush()
   }
 }
 object CopyAction {
@@ -104,32 +139,29 @@ object CopyAction {
     * Each column is paired with its database type so that JSON/JSONB values can be wrapped in [[PGobject]] before binding. Per-column writer functions are
     * precomputed at construction time to avoid per-row overhead.
     *
-    * @param quotedTable
-    *   Already-quoted table identifier for use in SQL statements.
+    * @param tableName
+    *   Unquoted table name — quoted internally for SQL, used as-is for error messages.
     * @param columns
-    *   Ordered sequence of (output column, database type) pairs — determines both the INSERT column list and the per-column transform/wrap logic.
+    *   Ordered sequence of (output column, database type) pairs — determines the per-column transform/wrap logic.
+    * @param insertSql
+    *   Fully-formed INSERT SQL statement (including any ON CONFLICT clause).
     * @param batchSize
     *   Number of rows to accumulate before flushing a batch INSERT.
     * @param conn
     *   JDBC connection on which prepared statements are created. Must remain open for the lifetime of this instance.
     */
   class BatchInserter(
-      quotedTable: String,
+      tableName: String,
       columns: Seq[(OutputColumn, String)],
+      insertSql: String,
       batchSize: Int,
       totalRows: Int,
       conn: Connection
   ) {
+    private val quotedTable = quoteIdentifier(tableName)
     private val buffer      = new ArrayBuffer[RawRow](batchSize)
     private var count       = 0
     private var lastLogTime = System.currentTimeMillis()
-
-    private val columnList = columns.map(c => quoteIdentifier(c._1.name)).mkString(", ")
-
-    private val insertSql: String = {
-      val placeholders = columns.map(_ => "?").mkString(", ")
-      s"INSERT INTO $quotedTable ($columnList) VALUES ($placeholders)"
-    }
 
     /** Per-column functions that extract a value from a [[RawRow]] and wrap JSON/JSONB values in [[PGobject]]. */
     private val writers =

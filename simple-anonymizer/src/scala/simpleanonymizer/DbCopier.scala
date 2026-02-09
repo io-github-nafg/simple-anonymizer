@@ -77,7 +77,8 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
                                   },
                                   whereClause = filters.getOrElse(tableName, None),
                                   limit = tableSpec.limit,
-                                  batchSize = tableSpec.batchSize
+                                  batchSize = tableSpec.batchSize,
+                                  onConflict = tableSpec.onConflict
                                 )
               tableCopier     = new TableCopier(
                                   source = sourceDbContext,

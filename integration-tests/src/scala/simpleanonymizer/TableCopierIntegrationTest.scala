@@ -230,4 +230,63 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
       } yield succeed
     }
   }
+
+  describe("onConflict") {
+    it("with doUpdate on explicit columns updates existing rows") { targetDb =>
+      val tableSpec = TableSpec.select(row => Seq(row.id, row.first_name, row.last_name, row.email))
+
+      for {
+        // First copy
+        _            <- copier(targetDb, "users", tableSpec.where("id = 1")).run
+        count1       <- targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        _            <- assert(count1 === 1)
+        originalName <- targetDb.run(sql"SELECT first_name FROM users WHERE id = 1".as[String].head)
+        _            <- assert(originalName === "John")
+        // Second copy with doUpdate on explicit column: should update
+        updateSpec    = TableSpec
+                          .select(row => Seq(row.id, row.first_name.mapString(_ => "UPDATED"), row.last_name, row.email))
+                          .where("id = 1")
+                          .onConflict(OnConflict.doUpdate("id"))
+        _            <- copier(targetDb, "users", updateSpec).run
+        updatedName  <- targetDb.run(sql"SELECT first_name FROM users WHERE id = 1".as[String].head)
+        _            <- assert(updatedName === "UPDATED")
+        // Count unchanged
+        count2       <- targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        _            <- assert(count2 === 1)
+      } yield succeed
+    }
+
+    it("with doNothing on explicit columns skips conflicting rows") { targetDb =>
+      val tableSpec = TableSpec.select(row => Seq(row.id, row.first_name, row.last_name, row.email))
+
+      for {
+        // First copy
+        _      <- copier(targetDb, "users", tableSpec.where("id <= 2")).run
+        count1 <- targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        _      <- assert(count1 === 2)
+        // Second copy with doNothing: existing skipped, new added
+        _      <- copier(targetDb, "users", tableSpec.where("id <= 4").onConflict(OnConflict.doNothing("id"))).run
+        count2 <- targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        _      <- assert(count2 === 4) // 2 existing + 2 new
+      } yield succeed
+    }
+
+  }
+
+  describe("limit") {
+    it("restricts the number of rows copied") { targetDb =>
+      val tableSpec =
+        TableSpec
+          .select(row => Seq(row.id, row.first_name, row.last_name, row.email))
+          .withLimit(3)
+          .withBatchSize(2)
+
+      for {
+        count       <- copier(targetDb, "users", tableSpec).run
+        _           <- assert(count === 3)
+        targetCount <- targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        _           <- assert(targetCount === 3)
+      } yield succeed
+    }
+  }
 }

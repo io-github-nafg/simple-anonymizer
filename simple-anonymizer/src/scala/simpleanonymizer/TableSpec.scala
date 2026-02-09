@@ -12,12 +12,15 @@ import scala.language.dynamics
   *   Optional row limit (ordered by `id` DESC if an `id` column exists).
   * @param batchSize
   *   Number of rows per INSERT batch (default 1000).
+  * @param onConflict
+  *   Behavior when INSERT conflicts with existing data (default: fail on conflict).
   */
 case class TableSpec(
     columns: Seq[OutputColumn],
     whereClause: Option[String] = None,
     limit: Option[Int] = None,
-    batchSize: Int = 1000
+    batchSize: Int = 1000,
+    onConflict: Option[OnConflict] = None
 ) {
   private[simpleanonymizer] val columnNames = columns.map(_.name)
 
@@ -34,6 +37,9 @@ case class TableSpec(
 
   /** Set the batch size for INSERT operations. */
   def withBatchSize(n: Int): TableSpec = copy(batchSize = n)
+
+  /** Set the ON CONFLICT strategy for handling duplicate rows during INSERT. */
+  def onConflict(strategy: OnConflict): TableSpec = copy(onConflict = Some(strategy))
 }
 
 object TableSpec {

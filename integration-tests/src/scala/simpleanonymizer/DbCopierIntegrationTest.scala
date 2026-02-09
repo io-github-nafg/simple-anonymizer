@@ -264,4 +264,112 @@ class DbCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll
       }
     }
   }
+
+  describe("onConflict") {
+    it("with doUpdate updates existing rows on primary key conflict") { fixture =>
+      val copier   =
+        new DbCopier(
+          sourceDb,
+          fixture.targetDb,
+          skippedTables = Set("orders", "order_items", "profiles", "employees", "tree_nodes")
+        )
+      val targetDb = fixture.targetDb
+
+      for {
+        // First copy: initial data
+        _              <- copier.run(
+                            "categories" -> TableSpec.select(row => Seq(row.name)),
+                            "users"      ->
+                              TableSpec
+                                .select(row => Seq(row.first_name, row.last_name, row.email))
+                                .where("id = 1")
+                          )
+        originalName   <- targetDb.run(sql"SELECT first_name FROM users WHERE id = 1".as[String].head)
+        _              <- assert(originalName == "John")
+        // Second copy with doUpdate: should update, not fail
+        _              <- copier.run(
+                            "categories" ->
+                              TableSpec
+                                .select(row => Seq(row.name))
+                                .onConflict(OnConflict.doNothing),
+                            "users"      ->
+                              TableSpec
+                                .select(row => Seq(row.first_name.mapString(_ => "UPDATED"), row.last_name, row.email))
+                                .where("id = 1")
+                                .onConflict(OnConflict.doUpdate)
+                          )
+        updatedName    <- targetDb.run(sql"SELECT first_name FROM users WHERE id = 1".as[String].head)
+        _              <- assert(updatedName == "UPDATED")
+        // Verify count didn't change (no duplicate)
+        userCount      <- targetDb.run(sql"SELECT COUNT(*) FROM users WHERE id = 1".as[Int].head)
+        _              <- assert(userCount == 1)
+        // Verify categories weren't duplicated
+        categoryCount  <- targetDb.run(sql"SELECT COUNT(*) FROM categories".as[Int].head)
+        originalCatCnt <- sourceDb.run(sql"SELECT COUNT(*) FROM categories".as[Int].head)
+        _              <- assert(categoryCount == originalCatCnt)
+      } yield succeed
+    }
+
+    it("with doNothing skips conflicting rows on primary key conflict") { fixture =>
+      val copier   =
+        new DbCopier(
+          sourceDb,
+          fixture.targetDb,
+          skippedTables = Set("orders", "order_items", "profiles", "employees", "tree_nodes")
+        )
+      val targetDb = fixture.targetDb
+
+      for {
+        // First copy
+        _           <- copier.run(
+                         "categories" -> TableSpec.select(row => Seq(row.name)),
+                         "users"      ->
+                           TableSpec
+                             .select(row => Seq(row.first_name, row.last_name, row.email))
+                             .where("id <= 2")
+                       )
+        count1      <- targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        _           <- assert(count1 == 2)
+        // Second copy with doNothing: existing rows skipped, new rows added
+        _           <- copier.run(
+                         "categories" -> TableSpec.select(row => Seq(row.name)).onConflict(OnConflict.doNothing),
+                         "users"      ->
+                           TableSpec
+                             .select(row => Seq(row.first_name, row.last_name, row.email))
+                             .where("id <= 4")
+                             .onConflict(OnConflict.doNothing)
+                       )
+        count2      <- targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        _           <- assert(count2 == 4) // 2 existing + 2 new
+        // Original data unchanged (not overwritten)
+        originalRow <- targetDb.run(sql"SELECT first_name FROM users WHERE id = 1".as[String].head)
+        _           <- assert(originalRow == "John")
+      } yield succeed
+    }
+
+  }
+
+  describe("limit") {
+    it("restricts the number of rows copied") { fixture =>
+      val copier   =
+        new DbCopier(
+          sourceDb,
+          fixture.targetDb,
+          skippedTables = Set("orders", "order_items", "profiles", "categories", "employees", "tree_nodes")
+        )
+      val targetDb = fixture.targetDb
+
+      for {
+        result    <- copier.run(
+                       "users" -> TableSpec
+                         .select(row => Seq(row.first_name, row.last_name, row.email))
+                         .withLimit(3)
+                         .withBatchSize(2)
+                     )
+        _         <- assert(result("users") == 3)
+        userCount <- targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        _         <- assert(userCount == 3)
+      } yield succeed
+    }
+  }
 }
