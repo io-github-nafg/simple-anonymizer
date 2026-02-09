@@ -26,17 +26,15 @@ import simpleanonymizer.SlickProfile.quoteIdentifier
   */
 private[simpleanonymizer] class CopyAction(
     sourceDb: Database,
-    quotedTable: String,
+    quotedTableName: String,
     tableSpec: TableSpec,
-    columns: Seq[(OutputColumn, String)],
-    limit: Option[Int],
-    batchSize: Int
+    columns: Seq[(OutputColumn, String)]
 )(implicit executionContext: ExecutionContext)
     extends SynchronousDatabaseAction[Int, NoStream, JdbcBackend#JdbcActionContext, JdbcBackend#JdbcStreamingActionContext, Effect.All] {
 
   override type StreamState = Null
 
-  override def getDumpInfo = DumpInfo(name = "CopyAction", mainInfo = quotedTable)
+  override def getDumpInfo = DumpInfo(name = "CopyAction", mainInfo = quotedTableName)
 
   private implicit val getRowResult: GetResult[RawRow] = GetResult { r =>
     val objectsAndStrings = tableSpec.columnNames.map { col =>
@@ -63,11 +61,13 @@ private[simpleanonymizer] class CopyAction(
 
   override def run(context: JdbcBackend#JdbcActionContext): Int = {
     val columnList = tableSpec.columnNames.map(quoteIdentifier).mkString(", ")
+    val limit      = tableSpec.limit
+    val batchSize  = tableSpec.batchSize
 
     val selectSql = {
       val orderBy =
         limit.filter(_ => tableSpec.columnNames.contains("id")).map(_ => s" ORDER BY ${quoteIdentifier("id")} DESC").getOrElse("")
-      s"SELECT $columnList FROM $quotedTable" +
+      s"SELECT $columnList FROM $quotedTableName" +
         tableSpec.whereClause.fold("")(w => s" WHERE $w") +
         orderBy +
         limit.fold("")(n => s" LIMIT $n")
@@ -76,9 +76,9 @@ private[simpleanonymizer] class CopyAction(
     println(s"[TableCopier] SELECT: $selectSql")
 
     val totalRows = Await.result(sourceDb.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head), Duration.Inf)
-    println(s"[TableCopier] Copying table: $quotedTable ($totalRows rows)")
+    println(s"[TableCopier] Copying table: $quotedTableName ($totalRows rows)")
 
-    val inserter = new CopyAction.BatchInserter(quotedTable, columns, batchSize, totalRows, context.connection)
+    val inserter = new CopyAction.BatchInserter(quotedTableName, columns, batchSize, totalRows, context.connection)
 
     Await.result(
       sourceDb

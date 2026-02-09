@@ -59,9 +59,9 @@ object FilterPropagation {
     val fksByChild = fks.groupBy(_.fkTable.name)
 
     tables.foldLeft(Map.empty[String, Option[String]]) { (effectiveFilters, table) =>
-      val filter = tableSpecs.get(table) match {
-        case Some(TableSpec(_, Some(whereClause))) => Some(whereClause)
-        case _                                     =>
+      val filter = tableSpecs.get(table).flatMap(_.whereClause) match {
+        case Some(whereClause) => Some(whereClause)
+        case None              =>
           val parentFilters = effectiveFilters.collect {
             case (t, Some(f)) if fksByChild.getOrElse(table, Nil).exists(_.pkTable.name == t) => t -> f
           }

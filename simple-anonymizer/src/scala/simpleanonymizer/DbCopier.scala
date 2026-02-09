@@ -65,17 +65,20 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
           } else
             for {
               allColumnNames <- sourceDb.run(table.getColumns.map(_.map(_.name)))
+              tableSpec       = specs.getOrElse(tableName, TableSpec(Seq.empty))
               // Merge user-specified output columns with passthrough for any remaining columns
               fullTableSpec   = TableSpec(
                                   columns = {
-                                    val userOutputColumns = specs.get(tableName).map(_.columns).getOrElse(Seq.empty)
+                                    val userOutputColumns = tableSpec.columns
                                     val specifiedNames    = userOutputColumns.map(_.name)
                                     val passthroughCols   = allColumnNames.diff(specifiedNames).map(OutputColumn.SourceColumn(_))
                                     passthroughCols ++ userOutputColumns
                                   },
-                                  whereClause = filters.getOrElse(tableName, None)
+                                  whereClause = filters.getOrElse(tableName, None),
+                                  limit = tableSpec.limit,
+                                  batchSize = tableSpec.batchSize
                                 )
-              tableCopier     = TableCopier(
+              tableCopier     = new TableCopier(
                                   sourceDb = sourceDb,
                                   targetDb = targetDb,
                                   schema = schema,
