@@ -5,7 +5,7 @@ class DbMetadataIntegrationTest extends PostgresTestBase {
   describe("getForeignKeys") {
     it("returns all FK relationships") {
       for {
-        fks <- db.run(dbMetadata.getAllForeignKeys)
+        fks <- dbMetadata.allForeignKeys
       } yield {
         assert(fks.exists(fk => fk.fkTable.name == "orders" && fk.pkTable.name == "users"))
         assert(fks.exists(fk => fk.fkTable.name == "order_items" && fk.pkTable.name == "orders"))
@@ -18,7 +18,7 @@ class DbMetadataIntegrationTest extends PostgresTestBase {
   describe("getAllTables") {
     it("returns all tables in the schema") {
       for {
-        tables <- db.run(dbMetadata.getAllTables)
+        tables <- dbMetadata.allTables
       } yield {
         val tableNames = tables.map(_.name.name)
         assert(tableNames.contains("users"))

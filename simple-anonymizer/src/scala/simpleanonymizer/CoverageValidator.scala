@@ -1,78 +1,93 @@
 package simpleanonymizer
 
-import slick.dbio.DBIO
 import slick.jdbc.meta.MForeignKey
 
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{ExecutionContext, Future}
 
-class CoverageValidator private (
-    allColumns: Map[String, Seq[String]],
-    allPrimaryKeys: Map[String, Set[String]],
-    fkColumnsByTable: Map[String, Set[String]]
-) {
+class CoverageValidator private (metadata: DbMetadata)(implicit ec: ExecutionContext) {
   import CoverageValidator._
+
+  private lazy val fkColumnsByTableFut: Future[Map[String, Set[String]]] =
+    metadata.allForeignKeys.map(fkColumnsByTable)
 
   /** List columns that need explicit handling in a [[TableSpec]] when used with [[DbCopier]].
     *
     * PK and FK columns are excluded because [[DbCopier]] passes them through automatically.
     */
-  def getDataColumns(tableName: String): Seq[String] = {
-    val columns       = allColumns.getOrElse(tableName, Seq.empty)
-    val pkColumnNames = allPrimaryKeys.getOrElse(tableName, Set.empty)
-    val fkColumnNames = fkColumnsByTable.getOrElse(tableName, Set.empty)
-    columns.filterNot(c => pkColumnNames.contains(c) || fkColumnNames.contains(c))
-  }
-
-  def ensureAllColumns(tableSpecs: Map[String, TableSpec]): Either[IllegalArgumentException, Unit] = {
-    val failures = tableSpecs.toSeq
-      .map { case (tableName, spec) =>
-        tableName -> spec.validateCovers(getDataColumns(tableName).toSet)
-      }
-      .collect { case (tableName, Left(missing)) => (tableName, missing) }
-
-    if (failures.isEmpty)
-      Right(())
-    else {
-      val failureMessages = failures.map { case (tableName, missing) =>
-        s"""Table '$tableName' is missing ${missing.size} column(s). Add these:
-           |      ${generateColumnSnippets(missing)}""".stripMargin
-      }
-      val errorMsg        =
-        s"""Table specs are missing columns for ${failures.size} table(s).
-           |
-           |${failureMessages.mkString("\n\n")}
-           |""".stripMargin
-
-      Left(new IllegalArgumentException(errorMsg))
+  def getDataColumns(tableName: String): Future[Seq[String]] =
+    for {
+      allColumns    <- metadata.allColumns
+      allPKs        <- metadata.allPrimaryKeys
+      fkColsByTable <- fkColumnsByTableFut
+    } yield {
+      val columns       = allColumns.getOrElse(tableName, Seq.empty)
+      val pkColumnNames = allPKs.getOrElse(tableName, Set.empty)
+      val fkColumnNames = fkColsByTable.getOrElse(tableName, Set.empty)
+      columns.filterNot(c => pkColumnNames.contains(c) || fkColumnNames.contains(c))
     }
-  }
 
-  def ensureAllTables(
+  private def ensureAllColumns(tableSpecs: Map[String, TableSpec]): Future[Unit] =
+    Future
+      .traverse(tableSpecs.toSeq) { case (tableName, spec) =>
+        getDataColumns(tableName).map(dataCols => tableName -> spec.validateCovers(dataCols.toSet))
+      }
+      .flatMap { results =>
+        val failures = results.collect { case (tableName, Left(missing)) => (tableName, missing) }
+        if (failures.isEmpty)
+          Future.unit
+        else {
+          val failureMessages = failures.map { case (tableName, missing) =>
+            s"""Table '$tableName' is missing ${missing.size} column(s). Add these:
+               |      ${generateColumnSnippets(missing)}""".stripMargin
+          }
+          val errorMsg        =
+            s"""Table specs are missing columns for ${failures.size} table(s).
+               |
+               |${failureMessages.mkString("\n\n")}
+               |""".stripMargin
+          Future.failed(new IllegalArgumentException(errorMsg))
+        }
+      }
+
+  private def ensureAllTables(
       tableNames: Seq[String],
       skippedTables: Set[String],
       copiedTables: Set[String]
-  ): Either[IllegalArgumentException, Unit] = {
+  ): Future[Unit] = {
     val requiredTables = tableNames.filterNot(skippedTables.contains)
     val missingTables  = requiredTables.filterNot(copiedTables.contains)
 
     if (missingTables.isEmpty)
-      Right(())
-    else {
-      val snippets = missingTables.map(t => generateTableSnippet(t, getDataColumns(t)))
-      val skipList = missingTables.map(t => s""""$t"""").mkString(", ")
-      val errorMsg =
-        s"""Missing table specs for ${missingTables.size} table(s).
-           |
-           |Add these tables to copier.run(...):
-           |
-           |${snippets.mkString(",\n\n")}
-           |
-           |Or skip them via DbCopier(skippedTables = Set($skipList))
-           |""".stripMargin
-
-      Left(new IllegalArgumentException(errorMsg))
-    }
+      Future.unit
+    else
+      Future
+        .traverse(missingTables)(t => getDataColumns(t).map(cols => generateTableSnippet(t, cols)))
+        .flatMap { snippets =>
+          val skipList = missingTables.map(t => s""""$t"""").mkString(", ")
+          val errorMsg =
+            s"""Missing table specs for ${missingTables.size} table(s).
+               |
+               |Add these tables to copier.run(...):
+               |
+               |${snippets.mkString(",\n\n")}
+               |
+               |Or skip them via DbCopier(skippedTables = Set($skipList))
+               |""".stripMargin
+          Future.failed(new IllegalArgumentException(errorMsg))
+        }
   }
+
+  /** Validate that all tables have specs and all specs cover their required columns. */
+  def validate(
+      tableNames: Seq[String],
+      skippedTables: Set[String],
+      tableSpecs: Map[String, TableSpec]
+  ): Future[Unit] =
+    for {
+      _ <- ensureAllTables(tableNames, skippedTables, tableSpecs.keySet)
+      _ <- ensureAllColumns(tableSpecs)
+      _  = println(s"[CoverageValidator] Validation passed.")
+    } yield ()
 }
 
 object CoverageValidator {
@@ -89,12 +104,9 @@ object CoverageValidator {
   def generateColumnSnippets(columns: Set[String]): String =
     columns.toSeq.sorted.map(col => s"row.$col").mkString(",\n      ")
 
-  def fkColumnsByTable(allFks: Seq[MForeignKey]): Map[String, Set[String]] =
+  private def fkColumnsByTable(allFks: Seq[MForeignKey]): Map[String, Set[String]] =
     allFks.groupBy(_.fkTable.name).map { case (table, fks) => table -> fks.map(_.fkColumn).toSet }
 
-  def apply(dbMetadata: DbMetadata, allFks: Seq[MForeignKey])(implicit ec: ExecutionContext): DBIO[CoverageValidator] =
-    for {
-      allColumns     <- dbMetadata.getAllColumns
-      allPrimaryKeys <- dbMetadata.getAllPrimaryKeys
-    } yield new CoverageValidator(allColumns, allPrimaryKeys, fkColumnsByTable(allFks))
+  def apply(metadata: DbMetadata)(implicit ec: ExecutionContext): CoverageValidator =
+    new CoverageValidator(metadata)
 }

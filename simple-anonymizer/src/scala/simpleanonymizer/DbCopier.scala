@@ -45,7 +45,7 @@ import scala.concurrent.{ExecutionContext, Future}
   */
 class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public", skippedTables: Set[String] = Set.empty)(implicit ec: ExecutionContext) {
 
-  private val dbMetadata = new DbMetadata(schema)
+  private val metadata = new DbMetadata(sourceDb, schema)
 
   private def copyTablesInOrder(
       tables: Seq[MTable],
@@ -53,6 +53,7 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
       specs: Map[String, TableSpec],
       filters: Map[String, Option[String]]
   ): Future[Map[String, Int]] = {
+    println(s"[DbCopier] Copying ${tables.size} tables...")
 
     def copyNext(remaining: List[MTable], acc: Map[String, Int]): Future[Map[String, Int]] =
       remaining match {
@@ -112,24 +113,14 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
   def run(tableSpecs: (String, TableSpec)*): Future[Map[String, Int]] = {
     val tableSpecsMap = tableSpecs.toMap
 
+    val validator = CoverageValidator(metadata)
+
     for {
-      _            <- Future.successful(println("[DbCopier] Fetching table metadata..."))
-      tables       <- sourceDb.run(dbMetadata.getAllTables)
-      _             = println(s"[DbCopier] Found ${tables.size} tables. Fetching foreign keys...")
-      fks          <- sourceDb.run(dbMetadata.getAllForeignKeys)
-      _             = println(s"[DbCopier] Found ${fks.size} foreign keys. Fetching columns and primary keys...")
-      validator    <- sourceDb.run(CoverageValidator(dbMetadata, fks))
-      _             = println(s"[DbCopier] Computing table order...")
+      tables       <- metadata.allTables
+      fks          <- metadata.allForeignKeys
       orderedTables = TableSorter(tables, fks).flatten
       filters       = FilterPropagation.computeEffectiveFilters(orderedTables.map(_.name.name), fks, tableSpecsMap)
-      _             = println(s"[DbCopier] Validating table coverage...")
-      // Validate that all non-skipped tables have transformers
-      _            <- Future.fromTry(validator.ensureAllTables(tables.map(_.name.name), skippedTables, tableSpecsMap.keySet).toTry)
-      _             = println(s"[DbCopier] Validating column coverage...")
-      // Validate that each transformer covers all required columns
-      _            <- Future.fromTry(validator.ensureAllColumns(tableSpecsMap).toTry)
-      _             = println(s"[DbCopier] Validation passed. Copying ${orderedTables.size} tables...")
-      // Copy tables level by level
+      _            <- validator.validate(tables.map(_.name.name), skippedTables, tableSpecsMap)
       result       <- copyTablesInOrder(orderedTables, skippedTables, tableSpecsMap, filters)
     } yield result
   }
