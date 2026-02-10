@@ -177,18 +177,17 @@ object CopyAction {
         }
       }
 
+    private val stmt = conn.prepareStatement(insertSql)
+
     private def insertBatch(batch: Vector[RawRow]) = {
-      val stmt = conn.prepareStatement(insertSql)
-      try {
-        for (rawRow <- batch) {
-          for (idx <- columns.indices)
-            stmt.setObject(idx + 1, writers(idx)(rawRow))
-          stmt.addBatch()
-        }
-        stmt.executeBatch()
-        batch.size
-      } finally
-        stmt.close()
+      for (rawRow <- batch) {
+        for (idx <- columns.indices)
+          stmt.setObject(idx + 1, writers(idx)(rawRow))
+        stmt.addBatch()
+      }
+      stmt.executeBatch()
+      stmt.clearBatch()
+      batch.size
     }
 
     /** Add a row to the buffer; flushes a batch INSERT when the buffer reaches `batchSize`. */
@@ -206,11 +205,13 @@ object CopyAction {
     }
 
     /** Insert any remaining buffered rows and return the total number of rows inserted across all batches. */
-    def flush(): Int = {
-      if (buffer.nonEmpty)
-        count += insertBatch(buffer.toVector)
-      println(s"[TableCopier] Copied $count/$totalRows rows from $quotedTable")
-      count
-    }
+    def flush(): Int =
+      try {
+        if (buffer.nonEmpty)
+          count += insertBatch(buffer.toVector)
+        println(s"[TableCopier] Copied $count/$totalRows rows from $quotedTable")
+        count
+      } finally
+        stmt.close()
   }
 }
