@@ -5,6 +5,7 @@ import java.sql.Connection
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.util.Success
 import slick.dbio.SynchronousDatabaseAction
 import slick.jdbc.{GetResult, JdbcBackend}
 import slick.util.DumpInfo
@@ -76,8 +77,9 @@ private[simpleanonymizer] class CopyAction(
 
     println(s"[TableCopier] SELECT: $selectSql")
 
-    val totalRows = Await.result(dbContext.db.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head), Duration.Inf)
-    println(s"[TableCopier] Copying table: $tableName ($totalRows rows)")
+    val totalRowsFut = dbContext.db.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head)
+    totalRowsFut.foreach(n => println(s"[TableCopier] Table $tableName has $n rows"))
+    println(s"[TableCopier] Copying table: $tableName")
 
     val insertSql = {
       val columnList                                                              = columns.map(c => quoteIdentifier(c._1.name)).mkString(", ")
@@ -117,7 +119,7 @@ private[simpleanonymizer] class CopyAction(
     Await.result(
       for {
         sql     <- insertSql
-        inserter = new CopyAction.BatchInserter(tableName, columns, sql, batchSize, totalRows, context.connection)
+        inserter = new CopyAction.BatchInserter(tableName, columns, sql, batchSize, totalRowsFut, context.connection)
         _       <-
           dbContext.db
             .stream(
@@ -155,13 +157,18 @@ object CopyAction {
       columns: Seq[(OutputColumn, String)],
       insertSql: String,
       batchSize: Int,
-      totalRows: Int,
+      totalRowsFut: Future[Int],
       conn: Connection
   ) {
     private val quotedTable = quoteIdentifier(tableName)
     private val buffer      = new ArrayBuffer[RawRow](batchSize)
     private var count       = 0
     private var lastLogTime = System.currentTimeMillis()
+
+    private def totalSuffix: String = totalRowsFut.value match {
+      case Some(Success(n)) => s"/$n"
+      case _                => ""
+    }
 
     /** Per-column functions that extract a value from a [[RawRow]] and wrap JSON/JSONB values in [[PGobject]]. */
     private val writers =
@@ -198,7 +205,7 @@ object CopyAction {
         buffer.clear()
         val now = System.currentTimeMillis()
         if (now - lastLogTime >= 5000) {
-          println(s"[TableCopier] Inserted $count/$totalRows rows into $quotedTable...")
+          println(s"[TableCopier] Inserted $count$totalSuffix rows into $quotedTable...")
           lastLogTime = now
         }
       }
@@ -209,7 +216,7 @@ object CopyAction {
       try {
         if (buffer.nonEmpty)
           count += insertBatch(buffer.toVector)
-        println(s"[TableCopier] Copied $count/$totalRows rows from $quotedTable")
+        println(s"[TableCopier] Copied $count$totalSuffix rows from $quotedTable")
         count
       } finally
         stmt.close()
