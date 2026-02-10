@@ -161,6 +161,15 @@ Or skip them via DbCopier(skippedTables = Set("products"))
 | `row.column := value` | Constant replacement (any type) | `row.status := "REDACTED"` |
 | `row.column.mapJsonArray(_.field.mapString(f))` | Transform field within JSON array | See below |
 
+### Table Options
+
+| Syntax | Description |
+|--------|-------------|
+| `.where("clause")` | Filter rows (multiple calls are ANDed) |
+| `.withLimit(n)` | Copy at most n rows (ordered by `id` DESC if present) |
+| `.withBatchSize(n)` | Rows per INSERT batch (default 1000) |
+| `.onConflict(strategy)` | Handle duplicate rows (see [ON CONFLICT](#handling-existing-data-on-conflict)) |
+
 ## Available Anonymizers
 
 Anonymizers are `String => String` functions that produce realistic fake data. Pass them directly to `mapString`:
