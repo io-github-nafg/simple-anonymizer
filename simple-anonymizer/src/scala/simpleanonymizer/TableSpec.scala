@@ -11,7 +11,7 @@ import scala.language.dynamics
   * @param limit
   *   Optional row limit (ordered by `id` DESC if an `id` column exists).
   * @param batchSize
-  *   Number of rows per INSERT batch (default 1000).
+  *   Number of rows per INSERT batch (default 5000).
   * @param onConflict
   *   Behavior when INSERT conflicts with existing data (default: fail on conflict).
   */
@@ -19,7 +19,7 @@ case class TableSpec(
     columns: Seq[OutputColumn],
     whereClause: Option[TableSpec.WhereClause] = None,
     limit: Option[Int] = None,
-    batchSize: Int = 1000,
+    batchSize: Int = 5000,
     onConflict: Option[OnConflict] = None
 ) {
   private[simpleanonymizer] val columnNames = columns.map(_.name)
