@@ -29,10 +29,10 @@ bleep publish -- --mode=local  # Publish to local Ivy repository
 
 `DbCopier.run()` orchestrates the full pipeline:
 1. `DbContext` introspects source schema (tables, FKs)
-2. `TableSorter` topologically sorts tables by FK dependencies into levels
+2. `TableSorter` topologically sorts tables by FK dependencies (returns levels, immediately flattened)
 3. `FilterPropagation` propagates WHERE clauses from parent to child tables via FK-based IN subqueries
 4. `CoverageValidator` ensures all tables and non-PK/non-FK columns have specs
-5. `TableCopier` copies each table sequentially (level by level), applying transformations in batched inserts (1000 rows)
+5. `TableCopier` copies each table sequentially in topological order, applying transformations in batched inserts (1000 rows)
 
 ### DSL Mechanics
 
@@ -46,7 +46,7 @@ bleep publish -- --mode=local  # Publish to local Ivy repository
 
 ### Dual Representation (RawRow)
 
-`RawRow` holds both `objects: Map[String, AnyRef]` and `strings: Map[String, String]`. Objects preserve DB types for passthrough columns; strings enable transformation functions. `TableCopier` pre-computes a `writers: Vector[RawRow => AnyRef]` array to avoid per-row pattern matching.
+`RawRow` holds both `objects: Map[String, AnyRef]` and `strings: Map[String, String]`. Objects preserve DB types for passthrough columns; strings enable transformation functions. `CopyAction.BatchInserter` pre-computes a `writers: Vector[RawRow => AnyRef]` array to avoid per-row pattern matching.
 
 ### Lens System
 
