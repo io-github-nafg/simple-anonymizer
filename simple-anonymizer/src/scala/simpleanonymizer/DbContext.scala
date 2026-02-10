@@ -65,3 +65,7 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
     )
   }
 }
+object DbContext {
+  private[simpleanonymizer] def fkColumnsByTable(allFks: Seq[MForeignKey]): Map[String, Set[String]] =
+    allFks.groupBy(_.fkTable.name).map { case (table, fks) => table -> fks.map(_.fkColumn).toSet }
+}

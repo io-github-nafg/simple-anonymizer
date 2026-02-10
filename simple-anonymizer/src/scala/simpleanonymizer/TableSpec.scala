@@ -7,7 +7,7 @@ import scala.language.dynamics
   * @param columns
   *   The columns to SELECT from source and INSERT into target, with optional transformations.
   * @param whereClause
-  *   Optional SQL WHERE clause to filter rows during copy.
+  *   Optional filter for rows during copy. Built via `.where(...)` calls, which are ANDed together into a [[TableSpec.WhereClause]] tree.
   * @param limit
   *   Optional row limit (ordered by `id` DESC if an `id` column exists).
   * @param batchSize
@@ -17,7 +17,7 @@ import scala.language.dynamics
   */
 case class TableSpec(
     columns: Seq[OutputColumn],
-    whereClause: Option[String] = None,
+    whereClause: Option[TableSpec.WhereClause] = None,
     limit: Option[Int] = None,
     batchSize: Int = 1000,
     onConflict: Option[OnConflict] = None
@@ -29,8 +29,9 @@ case class TableSpec(
     if (missing.isEmpty) Right(()) else Left(missing)
   }
 
-  /** Set or replace the WHERE clause for filtering rows. */
-  def where(whereClause: String): TableSpec = copy(whereClause = Some(whereClause))
+  /** Add a WHERE clause for filtering rows. Multiple calls are ANDed together. */
+  def where(whereClause: String): TableSpec =
+    copy(whereClause = TableSpec.WhereClause.combine(this.whereClause, Some(TableSpec.WhereClause.Single(whereClause))))
 
   /** Limit the number of rows copied. */
   def withLimit(n: Int): TableSpec = copy(limit = Some(n))
@@ -43,6 +44,30 @@ case class TableSpec(
 }
 
 object TableSpec {
+  sealed trait WhereClause {
+    def sql: String
+    def clauses: Seq[String]
+    def and(other: WhereClause): WhereClause
+    final def and(other: String): WhereClause = and(WhereClause.Single(other))
+  }
+  object WhereClause       {
+    case class Single(sql: String)                       extends WhereClause {
+      override def clauses: Seq[String]                 = Seq(sql)
+      override def and(other: WhereClause): WhereClause = Multiple(sql, other.clauses)
+    }
+    case class Multiple(head: String, tail: Seq[String]) extends WhereClause {
+      override def clauses: Seq[String]                 = head +: tail
+      override def sql: String                          = clauses.map("(" + _ + ")").mkString(" AND ")
+      override def and(other: WhereClause): WhereClause = Multiple(head, tail ++ other.clauses)
+    }
+
+    def combine(a: Option[WhereClause], b: Option[WhereClause]): Option[WhereClause] = (a, b) match {
+      case (None, None)       => None
+      case (None, Some(b))    => Some(b)
+      case (Some(a), None)    => Some(a)
+      case (Some(a), Some(b)) => Some(a.and(b))
+    }
+  }
 
   /** Dynamic row accessor - allows row.column_name syntax */
   class Row extends Dynamic {
@@ -52,7 +77,6 @@ object TableSpec {
   /** Entry point: select { row => Seq(...) } */
   def select(f: Row => Seq[OutputColumn]): TableSpec =
     TableSpec(
-      columns = f(new Row),
-      whereClause = None
+      columns = f(new Row)
     )
 }

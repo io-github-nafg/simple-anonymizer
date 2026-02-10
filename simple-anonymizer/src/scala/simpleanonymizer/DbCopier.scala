@@ -1,9 +1,8 @@
 package simpleanonymizer
 
-import slick.jdbc.meta.{MForeignKey, MTable}
+import slick.jdbc.meta.MTable
 
 import simpleanonymizer.SlickProfile.api._
-
 import scala.concurrent.{ExecutionContext, Future}
 
 /** High-level orchestrator for copying a database snapshot with subsetting and anonymization.
@@ -51,8 +50,7 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
   private def copyTablesInOrder(
       tables: Seq[MTable],
       skippedTables: Set[String],
-      specs: Map[String, TableSpec],
-      filters: Map[String, Option[String]]
+      specs: Map[String, TableSpec]
   ): Future[Map[String, Int]] = {
     println(s"[DbCopier] Copying ${tables.size} tables...")
 
@@ -65,13 +63,11 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
             println(s"[DbCopier] Skipping table: $tableName")
             copyNext(rest, acc + (tableName -> 0))
           } else {
-            val tableSpec   = specs.getOrElse(tableName, TableSpec(Seq.empty))
-            val fullSpec    = tableSpec.copy(whereClause = filters.getOrElse(tableName, None))
             val tableCopier = new TableCopier(
               source = sourceDbContext,
               targetDb = targetDb,
               tableName = tableName,
-              tableSpec = fullSpec
+              tableSpec = specs.getOrElse(tableName, TableSpec(Seq.empty))
             )
             for {
               count  <- tableCopier.run
@@ -83,23 +79,21 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
     copyNext(tables.toList, Map.empty)
   }
 
-  /** Add passthrough columns for PK and FK columns not already in the user's spec. */
-  private def augmentWithKeyColumns(
-      specs: Map[String, TableSpec],
-      pkColumnsByTable: Map[String, Set[String]],
-      fks: Seq[MForeignKey]
-  ): Map[String, TableSpec] = {
-    val fkColsByTable = CoverageValidator.fkColumnsByTable(fks)
-
-    specs.map { case (tableName, spec) =>
-      val specifiedNames = spec.columnNames.toSet
-      val pkColumns      = pkColumnsByTable.getOrElse(tableName, Set.empty)
-      val fkColumns      = fkColsByTable.getOrElse(tableName, Set.empty)
-      val missingKeys    = (pkColumns ++ fkColumns) -- specifiedNames
-      val passthrough    = missingKeys.toSeq.sorted.map(OutputColumn.SourceColumn(_))
-      tableName -> spec.copy(columns = passthrough ++ spec.columns)
+  private def addKeysAndSubsetting(
+      tableSpecsMap: Map[String, TableSpec],
+      pks: Map[String, Set[String]],
+      fks: Map[String, Set[String]],
+      filters: Map[String, TableSpec.WhereClause]
+  ) =
+    tableSpecsMap.transform { case (tableName, spec) =>
+      val keyColumns =
+        (pks.get(tableName) ++ fks.get(tableName)).flatten
+          .map(OutputColumn.SourceColumn(_))
+      spec.copy(
+        columns = (spec.columns ++ keyColumns).distinctBy(_.name),
+        whereClause = TableSpec.WhereClause.combine(spec.whereClause, filters.get(tableName))
+      )
     }
-  }
 
   /** Copy all tables from source to target with transformation (preferred API).
     *
@@ -123,14 +117,14 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
     val validator = CoverageValidator(sourceDbContext)
 
     for {
-      tables        <- sourceDbContext.allTables
-      fks           <- sourceDbContext.allForeignKeys
-      pks           <- sourceDbContext.allPrimaryKeys
-      orderedTables  = TableSorter(tables, fks).flatten
-      filters        = FilterPropagation.computeEffectiveFilters(orderedTables.map(_.name.name), fks, tableSpecsMap)
-      augmentedSpecs = augmentWithKeyColumns(tableSpecsMap, pks, fks)
-      _             <- validator.validate(tables.map(_.name.name), skippedTables, augmentedSpecs)
-      result        <- copyTablesInOrder(orderedTables, skippedTables, augmentedSpecs, filters)
+      tables       <- sourceDbContext.allTables
+      fks          <- sourceDbContext.allForeignKeys
+      pks          <- sourceDbContext.allPrimaryKeys
+      orderedTables = TableSorter(tables, fks).flatten
+      filters       = FilterPropagation.computePropagatedFilters(orderedTables.map(_.name.name), fks)(t => tableSpecsMap.get(t).flatMap(_.whereClause))
+      updatedSpecs  = addKeysAndSubsetting(tableSpecsMap, pks, DbContext.fkColumnsByTable(fks), filters)
+      _            <- validator.validate(tables.map(_.name.name), skippedTables, updatedSpecs)
+      result       <- copyTablesInOrder(orderedTables, skippedTables, updatedSpecs)
     } yield result
   }
 }

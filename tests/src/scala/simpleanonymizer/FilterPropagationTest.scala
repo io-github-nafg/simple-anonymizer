@@ -21,46 +21,15 @@ class FilterPropagationTest extends AnyFunSpec with TypeCheckedTripleEquals {
       deferrability = 0
     )
 
-  describe("generateChildWhereClause") {
-    it("returns None when no parent has a filter") {
-      val fks           = Seq(fk("orders", "user_id", "users", "id"))
-      val parentFilters = Map.empty[String, String]
-      val result        = FilterPropagation.generateChildWhereClause("orders", parentFilters, fks)
-      assert(result === None)
-    }
-
-    it("generates a subquery for a single FK") {
-      val fks           = Seq(fk("orders", "user_id", "users", "id"))
-      val parentFilters = Map("users" -> "created_at > '2024-01-01'")
-      val result        = FilterPropagation.generateChildWhereClause("orders", parentFilters, fks)
-      assert(result === Some("user_id IN (SELECT id FROM users WHERE created_at > '2024-01-01')"))
-    }
-
-    it("combines multiple FKs with AND") {
-      val fks           = Seq(
-        fk("order_items", "order_id", "orders", "id"),
-        fk("order_items", "product_id", "products", "id")
-      )
-      val parentFilters = Map(
-        "orders"   -> "status = 'active'",
-        "products" -> "available = true"
-      )
-      val result        = FilterPropagation.generateChildWhereClause("order_items", parentFilters, fks)
-      assert(result.isDefined)
-      val clause        = result.get
-      assert(clause.contains("order_id IN (SELECT id FROM orders WHERE status = 'active')"))
-      assert(clause.contains("product_id IN (SELECT id FROM products WHERE available = true)"))
-      assert(clause.contains(" AND "))
-    }
-  }
-
-  describe("computeEffectiveFilters") {
-    it("uses an explicit whereClause") {
+  describe("computePropagatedFilters") {
+    it("does not include explicit filters in the output") {
       val tables  = Seq("users")
       val fks     = Seq.empty[MForeignKey]
-      val specs   = Map("users" -> TableSpec.select(row => Seq(row.name)).where("active = true"))
-      val filters = FilterPropagation.computeEffectiveFilters(tables, fks, specs)
-      assert(filters("users") === Some("active = true"))
+      val filters = FilterPropagation.computePropagatedFilters(tables, fks) {
+        case "users" => Some(TableSpec.WhereClause.Single("active = true"))
+        case _       => None
+      }
+      assert(!filters.contains("users"))
     }
 
     it("propagates filters through FK chains") {
@@ -69,13 +38,57 @@ class FilterPropagationTest extends AnyFunSpec with TypeCheckedTripleEquals {
         fk("orders", "user_id", "users", "id"),
         fk("order_items", "order_id", "orders", "id")
       )
-      val specs   = Map("users" -> TableSpec.select(row => Seq(row.name)).where("active = true"))
-      val filters = FilterPropagation.computeEffectiveFilters(tables, fks, specs)
+      val filters =
+        FilterPropagation.computePropagatedFilters(tables, fks) {
+          case "users" => Some(TableSpec.WhereClause.Single("active = true"))
+          case _       => None
+        }
 
-      assert(filters("users") === Some("active = true"))
-      assert(filters("orders") === Some("user_id IN (SELECT id FROM users WHERE active = true)"))
-      assert(filters("order_items").isDefined)
-      assert(filters("order_items").get.contains("order_id IN (SELECT id FROM orders WHERE"))
+      assert(!filters.contains("users"))
+      assert(filters("orders").sql === "user_id IN (SELECT id FROM users WHERE active = true)")
+      assert(filters("order_items").sql.contains("order_id IN (SELECT id FROM orders WHERE"))
+    }
+
+    it("omits tables with no filter") {
+      val tables  = Seq("users", "categories")
+      val fks     = Seq.empty[MForeignKey]
+      val filters = FilterPropagation.computePropagatedFilters(tables, fks) {
+        case "users" => Some(TableSpec.WhereClause.Single("active = true"))
+        case _       => None
+      }
+      assert(!filters.contains("users"))
+      assert(!filters.contains("categories"))
+    }
+
+    it("propagates from multiple filtered parents to a shared child") {
+      val tables  = Seq("orders", "products", "order_items")
+      val fks     = Seq(
+        fk("order_items", "order_id", "orders", "id"),
+        fk("order_items", "product_id", "products", "id")
+      )
+      val filters =
+        FilterPropagation.computePropagatedFilters(tables, fks) {
+          case "orders"   => Some(TableSpec.WhereClause.Single("status = 'active'"))
+          case "products" => Some(TableSpec.WhereClause.Single("available = true"))
+          case _          => None
+        }
+
+      val clauses = filters("order_items").clauses
+      assert(clauses.size === 2)
+      assert(clauses.exists(_.contains("order_id IN (SELECT id FROM orders WHERE status = 'active')")))
+      assert(clauses.exists(_.contains("product_id IN (SELECT id FROM products WHERE available = true)")))
+    }
+
+    it("ANDs multiple parent clauses in the propagated subquery") {
+      val tables  = Seq("users", "orders")
+      val fks     = Seq(fk("orders", "user_id", "users", "id"))
+      val filters =
+        FilterPropagation.computePropagatedFilters(tables, fks) {
+          case "users" => Some(TableSpec.WhereClause.Multiple("active = true", Seq("role = 'admin'")))
+          case _       => None
+        }
+
+      assert(filters("orders").sql === "user_id IN (SELECT id FROM users WHERE (active = true) AND (role = 'admin'))")
     }
   }
 }

@@ -69,7 +69,7 @@ private[simpleanonymizer] class CopyAction(
       val orderBy =
         limit.filter(_ => tableSpec.columnNames.contains("id")).map(_ => s" ORDER BY ${quoteIdentifier("id")} DESC").getOrElse("")
       s"SELECT $columnList FROM $quotedTableName" +
-        tableSpec.whereClause.fold("")(w => s" WHERE $w") +
+        tableSpec.whereClause.fold("")(w => s" WHERE ${w.sql}") +
         orderBy +
         limit.fold("")(n => s" LIMIT $n")
     }

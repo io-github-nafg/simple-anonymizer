@@ -94,8 +94,7 @@ class TableSpecTest extends AnyFunSpec with TypeCheckedTripleEquals {
         columns = Seq(
           OutputColumn.SourceColumn("a"),
           OutputColumn.SourceColumn("b")
-        ),
-        whereClause = None
+        )
       )
       assert(spec.validateCovers(Set("a", "b")) === Right(()))
     }
@@ -104,8 +103,7 @@ class TableSpecTest extends AnyFunSpec with TypeCheckedTripleEquals {
       val spec = TableSpec(
         columns = Seq(
           OutputColumn.SourceColumn("a")
-        ),
-        whereClause = None
+        )
       )
       assert(spec.validateCovers(Set("a", "b", "c")) === Left(Set("b", "c")))
     }
@@ -116,8 +114,7 @@ class TableSpecTest extends AnyFunSpec with TypeCheckedTripleEquals {
           OutputColumn.SourceColumn("a"),
           OutputColumn.SourceColumn("b"),
           OutputColumn.SourceColumn("c")
-        ),
-        whereClause = None
+        )
       )
       assert(spec.validateCovers(Set("a", "b")) === Right(()))
     }
@@ -130,8 +127,7 @@ class TableSpecTest extends AnyFunSpec with TypeCheckedTripleEquals {
           OutputColumn.SourceColumn("a"),
           OutputColumn.FixedColumn("b", 42),
           OutputColumn.SourceColumn("c")
-        ),
-        whereClause = None
+        )
       )
       assert(spec.columnNames === Seq("a", "b", "c"))
     }

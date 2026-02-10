@@ -1,14 +1,10 @@
 package simpleanonymizer
 
-import slick.jdbc.meta.MForeignKey
-
 import scala.concurrent.{ExecutionContext, Future}
 
 class CoverageValidator private (dbContext: DbContext)(implicit ec: ExecutionContext) {
-  import CoverageValidator._
-
   private lazy val fkColumnsByTableFut: Future[Map[String, Set[String]]] =
-    dbContext.allForeignKeys.map(fkColumnsByTable)
+    dbContext.allForeignKeys.map(DbContext.fkColumnsByTable)
 
   /** List columns that need explicit handling in a [[TableSpec]] when used with [[DbCopier]].
     *
@@ -38,7 +34,7 @@ class CoverageValidator private (dbContext: DbContext)(implicit ec: ExecutionCon
       else {
         val failureMessages = failures.map { case (tableName, missing) =>
           s"""Table '$tableName' is missing ${missing.size} column(s). Add these:
-             |      ${generateColumnSnippets(missing)}""".stripMargin
+             |      ${CoverageValidator.generateColumnSnippets(missing)}""".stripMargin
         }
         val errorMsg        =
           s"""Table specs are missing columns for ${failures.size} table(s).
@@ -61,7 +57,7 @@ class CoverageValidator private (dbContext: DbContext)(implicit ec: ExecutionCon
       Future.unit
     else
       Future
-        .traverse(missingTables)(t => getDataColumns(t).map(cols => generateTableSnippet(t, cols)))
+        .traverse(missingTables)(t => getDataColumns(t).map(cols => CoverageValidator.generateTableSnippet(t, cols)))
         .flatMap { snippets =>
           val skipList = missingTables.map(t => s""""$t"""").mkString(", ")
           val errorMsg =
@@ -103,9 +99,6 @@ object CoverageValidator {
   /** Generate code snippets for missing column bindings. */
   def generateColumnSnippets(columns: Set[String]): String =
     columns.toSeq.sorted.map(col => s"row.$col").mkString(",\n      ")
-
-  private[simpleanonymizer] def fkColumnsByTable(allFks: Seq[MForeignKey]): Map[String, Set[String]] =
-    allFks.groupBy(_.fkTable.name).map { case (table, fks) => table -> fks.map(_.fkColumn).toSet }
 
   def apply(dbContext: DbContext)(implicit ec: ExecutionContext): CoverageValidator =
     new CoverageValidator(dbContext)

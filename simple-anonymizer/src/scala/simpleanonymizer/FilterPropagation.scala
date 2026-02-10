@@ -1,5 +1,7 @@
 package simpleanonymizer
 
+import scala.annotation.tailrec
+
 import slick.jdbc.meta.MForeignKey
 
 /** Propagates WHERE clauses through foreign key relationships.
@@ -8,66 +10,46 @@ import slick.jdbc.meta.MForeignKey
   * filtered parent rows. This module generates the appropriate subquery-based WHERE clauses.
   */
 object FilterPropagation {
+  private def inExpr(fk: MForeignKey, parentClause: TableSpec.WhereClause): TableSpec.WhereClause.Single =
+    TableSpec.WhereClause.Single(s"${fk.fkColumn} IN (SELECT ${fk.pkColumn} FROM ${fk.pkTable.name} WHERE ${parentClause.sql})")
 
-  /** Generate a WHERE clause for a child table based on the parent table's filter.
-    *
-    * @param childTable
-    *   Name of the child table
-    * @param parentFilters
-    *   Map of parent table names to their WHERE clauses
-    * @param fks
-    *   All foreign key relationships
-    * @return
-    *   WHERE clause with IN subquery, or None if no parent has a filter
-    */
-  private[simpleanonymizer] def generateChildWhereClause(
-      childTable: String,
-      parentFilters: Map[String, String],
-      fks: Seq[MForeignKey]
-  ): Option[String] = {
-    val relevantFks = fks.filter(_.fkTable.name == childTable)
-    val conditions  = relevantFks.flatMap { fk =>
-      parentFilters.get(fk.pkTable.name).map { parentWhere =>
-        s"${fk.fkColumn} IN (SELECT ${fk.pkColumn} FROM ${fk.pkTable.name} WHERE $parentWhere)"
-      }
-    }
-    if (conditions.isEmpty)
-      None
-    else
-      Some(conditions.mkString(" AND "))
-  }
-
-  /** Compute effective WHERE clauses for all tables based on root filters and FK relationships.
+  /** Compute propagated WHERE clauses for all tables based on root filters and FK relationships.
     *
     * Filters are propagated transitively through the FK graph. If table A has a filter, and table B references A, then B gets an IN subquery filter. If table C
     * references B, it gets a nested filter based on B's filter.
+    *
+    * The returned map contains only the <b>propagated</b> clauses (FK-based IN subqueries). Explicit filters participate in the propagation chain but are not
+    * repeated in the output — callers append the propagated clauses to the original explicit filters.
     *
     * @param tables
     *   Tables in topological order (parents before children)
     * @param fks
     *   All foreign key relationships
-    * @param tableSpecs
-    *   User-provided table specifications (may include explicit WHERE clauses)
+    * @param explicitClauses
+    *   Lookup function returning the user-provided [[TableSpec.WhereClause]] for a table, or None
     * @return
-    *   Map of table name to effective WHERE clause (None if no filter applies)
+    *   Map of table name to propagated [[TableSpec.WhereClause]] (only tables that received propagated filters)
     */
-  def computeEffectiveFilters(
+  def computePropagatedFilters(
       tables: Seq[String],
-      fks: Seq[MForeignKey],
-      tableSpecs: Map[String, TableSpec]
-  ): Map[String, Option[String]] = {
-    val fksByChild = fks.groupBy(_.fkTable.name)
+      fks: Seq[MForeignKey]
+  )(explicitClauses: String => Option[TableSpec.WhereClause]): Map[String, TableSpec.WhereClause] = {
+    val fksByChild = fks.groupBy(_.fkTable.name).withDefaultValue(Nil)
 
-    tables.foldLeft(Map.empty[String, Option[String]]) { (effectiveFilters, table) =>
-      val filter = tableSpecs.get(table).flatMap(_.whereClause) match {
-        case Some(whereClause) => Some(whereClause)
-        case None              =>
-          val parentFilters = effectiveFilters.collect {
-            case (t, Some(f)) if fksByChild.getOrElse(table, Nil).exists(_.pkTable.name == t) => t -> f
-          }
-          generateChildWhereClause(table, parentFilters, fks)
+    @tailrec
+    def loop(remaining: List[String], accumulated: Map[String, TableSpec.WhereClause]): Map[String, TableSpec.WhereClause] =
+      remaining match {
+        case Nil           => accumulated
+        case table :: rest =>
+          val whereClause =
+            fksByChild(table)
+              .foldLeft(Option.empty[TableSpec.WhereClause]) { (acc, fk) =>
+                val parentEffective = TableSpec.WhereClause.combine(explicitClauses(fk.pkTable.name), accumulated.get(fk.pkTable.name))
+                TableSpec.WhereClause.combine(acc, parentEffective.map(inExpr(fk, _)))
+              }
+          loop(rest, accumulated ++ whereClause.map(table -> _))
       }
-      effectiveFilters + (table -> filter)
-    }
+
+    loop(tables.toList, Map.empty)
   }
 }
