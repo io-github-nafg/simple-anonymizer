@@ -71,7 +71,7 @@ object TableSpec {
 
   /** Dynamic row accessor - allows row.column_name syntax */
   class Row extends Dynamic {
-    def selectDynamic(name: String): OutputColumn.SourceColumn = new OutputColumn.SourceColumn(name)
+    def selectDynamic(name: String): OutputColumn.SourceColumn = OutputColumn.SourceColumn(name)
   }
 
   /** Entry point: select { row => Seq(...) } */
