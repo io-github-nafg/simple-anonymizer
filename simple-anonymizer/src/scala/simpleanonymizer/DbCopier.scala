@@ -44,8 +44,8 @@ import scala.concurrent.{ExecutionContext, Future}
   *   }}}
   */
 class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public", skippedTables: Set[String] = Set.empty)(implicit ec: ExecutionContext) {
-
   private val sourceDbContext = new DbContext(sourceDb, schema)
+  val tableCopier             = new TableCopier(sourceDbContext, targetDb)
 
   private def copyTablesInOrder(
       tables: Seq[MTable],
@@ -62,18 +62,11 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
           if (skippedTables.contains(tableName)) {
             println(s"[DbCopier] Skipping table: $tableName")
             copyNext(rest, acc + (tableName -> 0))
-          } else {
-            val tableCopier = new TableCopier(
-              source = sourceDbContext,
-              targetDb = targetDb,
-              tableName = tableName,
-              tableSpec = specs.getOrElse(tableName, TableSpec(Seq.empty))
-            )
+          } else
             for {
-              count  <- tableCopier.run
+              count  <- tableCopier.run(tableName, specs.getOrElse(tableName, TableSpec(Seq.empty)))
               result <- copyNext(rest, acc + (tableName -> count))
             } yield result
-          }
       }
 
     copyNext(tables.toList, Map.empty)

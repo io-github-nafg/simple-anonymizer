@@ -11,46 +11,43 @@ import simpleanonymizer.SlickProfile.api._
   *
   * @param source
   *   Schema metadata for the source database. Used for column type lookups and resolving PK-based conflict targets (`upsertOnPk` / `skipConflictOnPk`).
-  * @param tableSpec
-  *   `columns` define <b>exactly</b> which columns are SELECTed from the source and INSERTed into target — there is no automatic passthrough. Every column that
-  *   should appear in the INSERT must be listed, including PK and FK columns if the target table requires them. Columns with database defaults (SERIAL,
-  *   nullable, DEFAULT) can be omitted. If a required column is missing, the INSERT will fail with a database error at runtime.
-  *
-  * <b>Note:</b> [[DbCopier]] automatically adds passthrough columns for any database columns not in the spec (including PKs and FKs).
   */
-class TableCopier(
-    source: DbContext,
-    targetDb: Database,
-    tableName: String,
-    tableSpec: TableSpec
-)(implicit ec: ExecutionContext) {
+class TableCopier(source: DbContext, val targetDb: Database)(implicit ec: ExecutionContext) {
+  /*
+   @param tableSpec
+   *   `columns` define <b>exactly</b> which columns are SELECTed from the source and INSERTed into target — there is no automatic passthrough. Every column that
+   *   should appear in the INSERT must be listed, including PK and FK columns if the target table requires them. Columns with database defaults (SERIAL,
+   *   nullable, DEFAULT) can be omitted. If a required column is missing, the INSERT will fail with a database error at runtime.
+   *
+   * <b>Note:</b> [[DbCopier]] automatically adds passthrough columns for any database columns not in the spec (including PKs and FKs).
+   */
+  def run(tableName: String, tableSpec: TableSpec): Future[Int] = {
 
-  /** Get column types for a table using raw SQL, validating that all spec columns exist in the source. */
-  private def columnTypesFut: Future[Seq[(OutputColumn, String)]] =
-    source.db
-      .run(
-        sql"""
+    /** Get column types for a table using raw SQL, validating that all spec columns exist in the source. */
+    def columnTypesFut: Future[Seq[(OutputColumn, String)]] =
+      source.db
+        .run(
+          sql"""
           SELECT column_name, data_type
           FROM information_schema.columns
           WHERE table_schema = ${source.schema} AND table_name = $tableName
         """.as[(String, String)]
-      )
-      .flatMap { colTypes =>
-        val typeMap        = colTypes.toMap
-        val missingColumns = tableSpec.columnNames.filterNot(typeMap.contains)
-        if (missingColumns.nonEmpty)
-          Future.failed(
-            new IllegalArgumentException(
-              s"Table '$tableName' spec references columns that do not exist in the source database: ${missingColumns.mkString(", ")}"
+        )
+        .flatMap { colTypes =>
+          val typeMap        = colTypes.toMap
+          val missingColumns = tableSpec.columnNames.filterNot(typeMap.contains)
+          if (missingColumns.nonEmpty)
+            Future.failed(
+              new IllegalArgumentException(
+                s"Table '$tableName' spec references columns that do not exist in the source database: ${missingColumns.mkString(", ")}"
+              )
             )
-          )
-        else
-          Future.successful(tableSpec.columns.map(c => c -> typeMap(c.name)))
-      }
+          else
+            Future.successful(tableSpec.columns.map(c => c -> typeMap(c.name)))
+        }
 
-  private val selfRefConstraints = new SelfRefConstraints(targetDb, source.schema, tableName)
+    val selfRefConstraints = new SelfRefConstraints(targetDb, source.schema, tableName)
 
-  def run: Future[Int] = {
     val transformedColumns = tableSpec.columns.collect { case c if !c.isInstanceOf[OutputColumn.SourceColumn] => c.name }
     if (transformedColumns.nonEmpty)
       println(s"[TableCopier] Transforming columns of $tableName: ${transformedColumns.mkString(", ")}")
