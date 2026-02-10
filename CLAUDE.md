@@ -29,10 +29,10 @@ bleep publish -- --mode=local  # Publish to local Ivy repository
 
 `DbCopier.run()` orchestrates the full pipeline:
 1. `DbContext` introspects source schema (tables, FKs)
-2. `TableSorter` topologically sorts tables by FK dependencies (returns levels, immediately flattened)
+2. `TableSorter` topologically sorts tables by FK dependencies (returns levels)
 3. `FilterPropagation` propagates WHERE clauses from parent to child tables via FK-based IN subqueries
 4. `CoverageValidator` ensures all tables and non-PK/non-FK columns have specs
-5. `TableCopier` copies each table sequentially in topological order, applying transformations in batched inserts (1000 rows)
+5. Tables within each level are copied in parallel via `Future.traverse`; levels are processed sequentially to respect FK ordering
 
 ### DSL Mechanics
 

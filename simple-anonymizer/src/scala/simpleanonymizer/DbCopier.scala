@@ -47,29 +47,29 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
   private val sourceDbContext = new DbContext(sourceDb, schema)
   val tableCopier             = new TableCopier(sourceDbContext, targetDb)
 
-  private def copyTablesInOrder(
-      tables: Seq[MTable],
-      skippedTables: Set[String],
+  private def copyTablesByLevel(
+      levels: Seq[Seq[MTable]],
       specs: Map[String, TableSpec]
   ): Future[Map[String, Int]] = {
-    println(s"[DbCopier] Copying ${tables.size} tables...")
+    val totalTables = levels.map(_.size).sum
+    println(s"[DbCopier] Copying $totalTables tables in ${levels.size} levels...")
 
-    def copyNext(remaining: List[MTable], acc: Map[String, Int]): Future[Map[String, Int]] =
-      remaining match {
-        case Nil           => Future.successful(acc)
-        case table :: rest =>
-          val tableName = table.name.name
-          if (skippedTables.contains(tableName)) {
-            println(s"[DbCopier] Skipping table: $tableName")
-            copyNext(rest, acc + (tableName -> 0))
-          } else
-            for {
-              count  <- tableCopier.run(tableName, specs.getOrElse(tableName, TableSpec(Seq.empty)))
-              result <- copyNext(rest, acc + (tableName -> count))
-            } yield result
+    levels.foldLeft(Future.successful(Map.empty[String, Int])) { (accFut, level) =>
+      accFut.flatMap { acc =>
+        Future
+          .traverse(level) { table =>
+            val tableName = table.name.name
+            if (skippedTables.contains(tableName)) {
+              println(s"[DbCopier] Skipping table: $tableName")
+              Future.successful(tableName -> 0)
+            } else
+              tableCopier
+                .run(tableName, specs.getOrElse(tableName, TableSpec(Seq.empty)))
+                .map(count => tableName -> count)
+          }
+          .map(results => acc ++ results)
       }
-
-    copyNext(tables.toList, Map.empty)
+    }
   }
 
   private def addKeysAndSubsetting(
@@ -113,11 +113,12 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
       tables       <- sourceDbContext.allTables
       fks          <- sourceDbContext.allForeignKeys
       pks          <- sourceDbContext.allPrimaryKeys
-      orderedTables = TableSorter(tables, fks).flatten
+      tableLevels   = TableSorter(tables, fks)
+      orderedTables = tableLevels.flatten
       filters       = FilterPropagation.computePropagatedFilters(orderedTables.map(_.name.name), fks)(t => tableSpecsMap.get(t).flatMap(_.whereClause))
       updatedSpecs  = addKeysAndSubsetting(tableSpecsMap, pks, DbContext.fkColumnsByTable(fks), filters)
       _            <- validator.validate(tables.map(_.name.name), skippedTables, updatedSpecs)
-      result       <- copyTablesInOrder(orderedTables, skippedTables, updatedSpecs)
+      result       <- copyTablesByLevel(tableLevels, updatedSpecs)
     } yield result
   }
 }
