@@ -2,7 +2,7 @@ package simpleanonymizer
 
 import simpleanonymizer.SlickProfile.api._
 
-import slick.jdbc.meta.{MColumn, MForeignKey, MQName, MTable}
+import slick.jdbc.meta.{MForeignKey, MQName, MTable}
 
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -38,15 +38,37 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
     }
   }
 
-  /** All column names grouped by table name. */
-  lazy val allColumns: Future[Map[String, Seq[String]]] = {
+  /** All column (name, data_type) pairs grouped by table name. Single bulk query serves both column-name and column-type lookups. */
+  private lazy val allColumnInfo: Future[Map[String, Map[String, String]]] = {
     println("[DbContext] Fetching columns...")
     db.run(
-      MColumn.getColumns(MQName(None, Some(schema), "%"), "%").map { columns =>
-        columns.groupBy(_.table.name).map { case (table, cols) => table -> cols.map(_.name) }
-      }
-    )
+      sql"""
+        SELECT table_name, column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = $schema
+      """.as[(String, String, String)]
+    ).map(_.groupBy(_._1).map { case (table, cols) => table -> cols.map(c => c._2 -> c._3).toMap })
   }
+
+  /** All column names grouped by table name. */
+  lazy val allColumns: Future[Map[String, Seq[String]]] =
+    allColumnInfo.map(_.map { case (table, cols) => table -> cols.keys.toSeq })
+
+  /** Column types for a single table. Uses bulk cache, falls back to per-table query if not cached (e.g., dynamically-created tables). */
+  def columnTypesFor(tableName: String): Future[Map[String, String]] =
+    allColumnInfo.flatMap {
+      _.get(tableName) match {
+        case Some(typeMap) => Future.successful(typeMap)
+        case None          =>
+          db.run(
+            sql"""
+              SELECT column_name, data_type
+              FROM information_schema.columns
+              WHERE table_schema = $schema AND table_name = $tableName
+            """.as[(String, String)]
+          ).map(_.toMap)
+      }
+    }
 
   /** All primary key column names grouped by table name. */
   lazy val allPrimaryKeys: Future[Map[String, Set[String]]] = {

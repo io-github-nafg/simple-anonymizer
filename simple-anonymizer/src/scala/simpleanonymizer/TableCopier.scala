@@ -23,28 +23,18 @@ class TableCopier(source: DbContext, val targetDb: Database)(implicit ec: Execut
    */
   def run(tableName: String, tableSpec: TableSpec): Future[Int] = {
 
-    /** Get column types for a table using raw SQL, validating that all spec columns exist in the source. */
     def columnTypesFut: Future[Seq[(OutputColumn, String)]] =
-      source.db
-        .run(
-          sql"""
-          SELECT column_name, data_type
-          FROM information_schema.columns
-          WHERE table_schema = ${source.schema} AND table_name = $tableName
-        """.as[(String, String)]
-        )
-        .flatMap { colTypes =>
-          val typeMap        = colTypes.toMap
-          val missingColumns = tableSpec.columnNames.filterNot(typeMap.contains)
-          if (missingColumns.nonEmpty)
-            Future.failed(
-              new IllegalArgumentException(
-                s"Table '$tableName' spec references columns that do not exist in the source database: ${missingColumns.mkString(", ")}"
-              )
+      source.columnTypesFor(tableName).flatMap { typeMap =>
+        val missingColumns = tableSpec.columnNames.filterNot(typeMap.contains)
+        if (missingColumns.nonEmpty)
+          Future.failed(
+            new IllegalArgumentException(
+              s"Table '$tableName' spec references columns that do not exist in the source database: ${missingColumns.mkString(", ")}"
             )
-          else
-            Future.successful(tableSpec.columns.map(c => c -> typeMap(c.name)))
-        }
+          )
+        else
+          Future.successful(tableSpec.columns.map(c => c -> typeMap(c.name)))
+      }
 
     val selfRefConstraints = new SelfRefConstraints(targetDb, source.schema, tableName)
 
