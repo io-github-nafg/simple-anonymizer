@@ -16,16 +16,14 @@ import simpleanonymizer.SlickProfile.quoteIdentifier
 
 /** Synchronous DBIO action that streams rows from a source database and batch-inserts them into the target via a pinned JDBC connection.
   *
-  * Runs within a Slick transaction on the target database. Reads are streamed from `sourceDb` using a server-side cursor (via `fetchSize`), buffered into
+  * Runs within a Slick transaction on the target database. Reads are streamed from the source using a server-side cursor (via `fetchSize`), buffered into
   * batches by [[CopyAction.BatchInserter]], and inserted using JDBC prepared statements on the target connection provided by the action context.
   *
-  * @param sourceDb
-  *   Database to stream rows from.
-  * @param columns
-  *   Ordered (output column, database type) pairs — used for both SELECT column ordering and INSERT parameter binding with JSON wrapping.
+  * Both SELECT and INSERT statements use schema-qualified table names to avoid ambiguity when source and target use different schemas.
   */
 private[simpleanonymizer] class CopyAction(
-    dbContext: DbContext,
+    sourceDbContext: DbContext,
+    targetSchema: String,
     tableName: String,
     tableSpec: TableSpec,
     columns: Seq[(OutputColumn, String)]
@@ -34,9 +32,10 @@ private[simpleanonymizer] class CopyAction(
 
   override type StreamState = Null
 
-  private val quotedTableName = quoteIdentifier(tableName)
+  private val sourceQualifiedTable = CopyAction.qualifiedTable(sourceDbContext.schema, tableName)
+  private val targetQualifiedTable = CopyAction.qualifiedTable(targetSchema, tableName)
 
-  override def getDumpInfo = DumpInfo(name = "CopyAction", mainInfo = quotedTableName)
+  override def getDumpInfo = DumpInfo(name = "CopyAction", mainInfo = sourceQualifiedTable)
 
   private implicit val getRowResult: GetResult[RawRow] = GetResult { r =>
     val objectsAndStrings = tableSpec.columnNames.map { col =>
@@ -69,7 +68,7 @@ private[simpleanonymizer] class CopyAction(
     val selectSql = {
       val orderBy =
         limit.filter(_ => tableSpec.columnNames.contains("id")).map(_ => s" ORDER BY ${quoteIdentifier("id")} DESC").getOrElse("")
-      s"SELECT $columnList FROM $quotedTableName" +
+      s"SELECT $columnList FROM $sourceQualifiedTable" +
         tableSpec.whereClause.fold("")(w => s" WHERE ${w.sql}") +
         orderBy +
         limit.fold("")(n => s" LIMIT $n")
@@ -77,7 +76,7 @@ private[simpleanonymizer] class CopyAction(
 
     println(s"[TableCopier] SELECT: $selectSql")
 
-    val totalRowsFut = dbContext.db.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head)
+    val totalRowsFut = sourceDbContext.db.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head)
     totalRowsFut.foreach(n => println(s"[TableCopier] Table $tableName has $n rows"))
     println(s"[TableCopier] Copying table: $tableName")
 
@@ -100,7 +99,7 @@ private[simpleanonymizer] class CopyAction(
                              case OnConflict.ConflictTarget.Constraint(name) => Future.successful(Left(name))
                              case OnConflict.ConflictTarget.Columns(cols)    => Future.successful(Right(cols))
                              case OnConflict.ConflictTarget.PrimaryKey       =>
-                               dbContext.allPrimaryKeys.map(_.getOrElse(tableName, Set.empty).toSeq.sorted).map(Right(_))
+                               sourceDbContext.allPrimaryKeys.map(_.getOrElse(tableName, Set.empty).toSeq.sorted).map(Right(_))
                            }
           conflictTarget = cols match {
                              case Left(constraint) => s"ON CONSTRAINT ${quoteIdentifier(constraint)}"
@@ -113,7 +112,7 @@ private[simpleanonymizer] class CopyAction(
                            case None        => Future.successful("")
                          }
         placeholders   = columns.map(_ => "?").mkString(", ")
-      } yield s"INSERT INTO $quotedTableName ($columnList) VALUES ($placeholders)$onConflictStr"
+      } yield s"INSERT INTO $targetQualifiedTable ($columnList) VALUES ($placeholders)$onConflictStr"
     }
 
     Await.result(
@@ -121,7 +120,7 @@ private[simpleanonymizer] class CopyAction(
         sql     <- insertSql
         inserter = new CopyAction.BatchInserter(tableName, columns, sql, batchSize, totalRowsFut, context.connection)
         _       <-
-          dbContext.db
+          sourceDbContext.db
             .stream(
               sql"#$selectSql"
                 .as[RawRow]
@@ -135,6 +134,8 @@ private[simpleanonymizer] class CopyAction(
   }
 }
 object CopyAction {
+  private[simpleanonymizer] def qualifiedTable(schema: String, tableName: String): String =
+    s"${quoteIdentifier(schema)}.${quoteIdentifier(tableName)}"
 
   /** Buffers rows and inserts them in batches via JDBC prepared statements.
     *

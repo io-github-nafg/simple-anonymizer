@@ -47,7 +47,8 @@ class TableCopier(source: DbContext, val target: DbContext)(implicit ec: Executi
         _           <- selfRefConstraints.deferAll(constraints.flatMap(_.fkName).distinct)
         columnTypes <- columnTypesFut
         copyAction   = new CopyAction(
-                         dbContext = source,
+                         sourceDbContext = source,
+                         targetSchema = target.schema,
                          tableName = tableName,
                          tableSpec = tableSpec,
                          columns = columnTypes
