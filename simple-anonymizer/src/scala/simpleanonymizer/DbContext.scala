@@ -1,10 +1,10 @@
 package simpleanonymizer
 
 import simpleanonymizer.SlickProfile.api._
-
 import slick.jdbc.meta.{MForeignKey, MQName, MTable}
-
 import scala.concurrent.{ExecutionContext, Future}
+
+import slick.jdbc.GetResult
 
 /** A Slick database paired with lazily-cached schema metadata.
   *
@@ -70,6 +70,29 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
       }
     }
 
+  /** All sequence-backed columns (SERIAL, BIGSERIAL, GENERATED AS IDENTITY). */
+  lazy val allSequences: Future[Seq[DbContext.SequenceInfo]] = {
+    println("[DbContext] Fetching sequences...")
+    db.run(
+      sql"""
+        SELECT t.relname, a.attname, s.relname
+        FROM pg_class s
+        JOIN pg_namespace ns ON ns.oid = s.relnamespace
+        JOIN pg_depend d ON d.objid = s.oid
+        JOIN pg_class t ON t.oid = d.refobjid
+        JOIN pg_namespace nt ON nt.oid = t.relnamespace
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid
+        WHERE s.relkind = 'S'
+          AND ns.nspname = $schema
+          AND nt.nspname = $schema
+          AND d.deptype IN ('a', 'i')
+      """.as[DbContext.SequenceInfo]
+    ).map { seqs =>
+      println(s"[DbContext] Found ${seqs.size} sequences.")
+      seqs
+    }
+  }
+
   /** All primary key column names grouped by table name. */
   lazy val allPrimaryKeys: Future[Map[String, Set[String]]] = {
     println("[DbContext] Fetching primary keys...")
@@ -88,6 +111,11 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
   }
 }
 object DbContext {
+  case class SequenceInfo(tableName: String, columnName: String, sequenceName: String)
+  object SequenceInfo {
+    implicit val getSequenceInfo: GetResult[SequenceInfo] = GetResult(r => SequenceInfo(r.<<, r.<<, r.<<))
+  }
+
   private[simpleanonymizer] def fkColumnsByTable(allFks: Seq[MForeignKey]): Map[String, Set[String]] =
     allFks.groupBy(_.fkTable.name).map { case (table, fks) => table -> fks.map(_.fkColumn).toSet }
 }

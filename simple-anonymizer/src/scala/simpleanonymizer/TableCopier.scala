@@ -12,7 +12,7 @@ import simpleanonymizer.SlickProfile.api._
   * @param source
   *   Schema metadata for the source database. Used for column type lookups and resolving PK-based conflict targets (`upsertOnPk` / `skipConflictOnPk`).
   */
-class TableCopier(source: DbContext, val targetDb: Database)(implicit ec: ExecutionContext) {
+class TableCopier(source: DbContext, val target: DbContext)(implicit ec: ExecutionContext) {
   /*
    @param tableSpec
    *   `columns` define <b>exactly</b> which columns are SELECTed from the source and INSERTed into target — there is no automatic passthrough. Every column that
@@ -36,7 +36,7 @@ class TableCopier(source: DbContext, val targetDb: Database)(implicit ec: Execut
           Future.successful(tableSpec.columns.map(c => c -> typeMap(c.name)))
       }
 
-    val selfRefConstraints = new SelfRefConstraints(targetDb, source.schema, tableName)
+    val selfRefConstraints = new SelfRefConstraints(target.db, source.schema, tableName)
 
     val transformedColumns = tableSpec.columns.collect { case c if !c.isInstanceOf[OutputColumn.SourceColumn] => c.name }
     if (transformedColumns.nonEmpty)
@@ -52,8 +52,31 @@ class TableCopier(source: DbContext, val targetDb: Database)(implicit ec: Execut
                          tableSpec = tableSpec,
                          columns = columnTypes
                        )
-        count       <- targetDb.run(copyAction.transactionally)
+        count       <- target.db.run(copyAction.transactionally)
+        _           <- resetSequences(tableName)
       } yield count
     }
   }
+
+  private def resetSequences(tableName: String): Future[Unit] =
+    target.allSequences.flatMap { allSeqs =>
+      val seqs = allSeqs.filter(_.tableName == tableName)
+      Future
+        .traverse(seqs) { seq =>
+          val quotedSchema   = SlickProfile.quoteIdentifier(target.schema)
+          val quotedTable    = s"$quotedSchema.${SlickProfile.quoteIdentifier(tableName)}"
+          val quotedColumn   = SlickProfile.quoteIdentifier(seq.columnName)
+          val quotedSequence = s"$quotedSchema.${SlickProfile.quoteIdentifier(seq.sequenceName)}"
+          target.db
+            .run(
+              sql"SELECT setval('#$quotedSequence', coalesce(max(#$quotedColumn), 0) + 1, false) FROM #$quotedTable"
+                .as[Long]
+                .head
+            )
+            .map { newVal =>
+              println(s"[TableCopier] Reset sequence ${seq.sequenceName} to $newVal for $tableName.${seq.columnName}")
+            }
+        }
+        .map(_ => ())
+    }
 }

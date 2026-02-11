@@ -18,7 +18,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
     val (targetDb, dbName) = PostgresTestBase.createTargetDb()
 
     complete {
-      withFixture(test.toNoArgAsyncTest(new TableCopier(dbContext, targetDb)))
+      withFixture(test.toNoArgAsyncTest(new TableCopier(dbContext, new DbContext(targetDb, "public"))))
     }.lastly {
       try targetDb.close()
       finally PostgresTestBase.dropTargetDb(dbName)
@@ -30,7 +30,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
       for {
         count       <- copier.run("users", TableSpec.select(row => Seq(row.id, row.first_name, row.last_name, row.email)))
         _           <- assert(count === 10)
-        targetCount <- copier.targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        targetCount <- copier.target.db.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
         _           <- assert(targetCount === 10)
       } yield succeed
     }
@@ -48,7 +48,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
                       )
                     }
                   )
-        result <- copier.targetDb.run(
+        result <- copier.target.db.run(
                     sql"SELECT first_name, last_name, email FROM users WHERE id = 1".as[(String, String, String)].head
                   )
         _      <- assert(result._1 === "JOHN")
@@ -61,7 +61,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
       for {
         count       <- copier.run("users", TableSpec.select(row => Seq(row.id, row.first_name, row.last_name, row.email)).withLimit(3))
         _           <- assert(count === 3)
-        targetCount <- copier.targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        targetCount <- copier.target.db.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
         _           <- assert(targetCount === 3)
       } yield succeed
     }
@@ -79,7 +79,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
       for {
         count                <- copier.run("users", tableSpec)
         _                    <- assert(count === 10)
-        (firstName1, email1) <- copier.targetDb.run(sql"SELECT first_name, email FROM users WHERE id = 1".as[(String, String)].head)
+        (firstName1, email1) <- copier.target.db.run(sql"SELECT first_name, email FROM users WHERE id = 1".as[(String, String)].head)
         _                    <- assert(firstName1 != "John")
         _                    <- assert(email1.contains("@"))
         _                    <- assert(!email1.contains("john.doe"))
@@ -96,7 +96,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
                     }
                   )
         _      <- assert(count === 8)
-        phones <- copier.targetDb.run(sql"SELECT phones FROM profiles WHERE user_id = 1".as[String].head)
+        phones <- copier.target.db.run(sql"SELECT phones FROM profiles WHERE user_id = 1".as[String].head)
         _      <- assert(phones.contains("XXX-XXXX"))
         _      <- assert(!phones.contains("555-0101"))
         _      <- assert(!phones.contains("555-0102"))
@@ -113,7 +113,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
                     }
                   )
         _      <- assert(count === 8)
-        phones <- copier.targetDb.run(sql"SELECT phones FROM profiles WHERE user_id = 1".as[String].head)
+        phones <- copier.target.db.run(sql"SELECT phones FROM profiles WHERE user_id = 1".as[String].head)
         _      <- assert(!phones.contains("555-0101"))
         _      <- assert(!phones.contains("555-0102"))
         _      <- assert(phones.contains("("))
@@ -128,7 +128,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
                           TableSpec.select(row => Seq(row.id, row.name, row.parent_id)).withBatchSize(3)
                         )
           _          <- assert(count === 10)
-          childCount <- copier.targetDb.run(sql"SELECT COUNT(*) FROM categories WHERE parent_id IS NOT NULL".as[Int].head)
+          childCount <- copier.target.db.run(sql"SELECT COUNT(*) FROM categories WHERE parent_id IS NOT NULL".as[Int].head)
           _          <- assert(childCount === 7)
         } yield succeed
       }
@@ -140,9 +140,9 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
                              TableSpec.select(row => Seq(row.id, row.name, row.manager_id, row.mentor_id)).withBatchSize(2)
                            )
           _             <- assert(count === 6)
-          managedCount  <- copier.targetDb.run(sql"SELECT COUNT(*) FROM employees WHERE manager_id IS NOT NULL".as[Int].head)
+          managedCount  <- copier.target.db.run(sql"SELECT COUNT(*) FROM employees WHERE manager_id IS NOT NULL".as[Int].head)
           _             <- assert(managedCount === 3)
-          mentoredCount <- copier.targetDb.run(sql"SELECT COUNT(*) FROM employees WHERE mentor_id IS NOT NULL".as[Int].head)
+          mentoredCount <- copier.target.db.run(sql"SELECT COUNT(*) FROM employees WHERE mentor_id IS NOT NULL".as[Int].head)
           _             <- assert(mentoredCount === 3)
         } yield succeed
       }
@@ -156,7 +156,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
                             .withBatchSize(2)
                         )
           _          <- assert(count === 6)
-          childCount <- copier.targetDb.run(sql"SELECT COUNT(*) FROM tree_nodes WHERE parent_group_id IS NOT NULL".as[Int].head)
+          childCount <- copier.target.db.run(sql"SELECT COUNT(*) FROM tree_nodes WHERE parent_group_id IS NOT NULL".as[Int].head)
           _          <- assert(childCount === 4)
         } yield succeed
       }
@@ -170,7 +170,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
                        TableSpec.select(row => Seq(row.id, row.user_id, row.total, row.status))
                      )
         _         <- assert(count === 12)
-        joinCount <- copier.targetDb.run(
+        joinCount <- copier.target.db.run(
                        sql"""SELECT COUNT(*) FROM orders o
                 JOIN users u ON o.user_id = u.id""".as[Int].head
                      )
@@ -195,7 +195,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
         _ <- sourceDb.run(
                sqlu"""INSERT INTO "#$maliciousTableName" ("#$maliciousColumnName") VALUES ('test data 1'), ('test data 2')"""
              )
-        _ <- copier.targetDb.run(createTableSql)
+        _ <- copier.target.db.run(createTableSql)
 
         orderCountBefore <- sourceDb.run(sql"SELECT COUNT(*) FROM orders".as[Int].head)
         _                <- assert(orderCountBefore === 12, "Orders should exist before copy")
@@ -209,7 +209,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
         orderCountAfter <- sourceDb.run(sql"SELECT COUNT(*) FROM orders".as[Int].head)
         _               <- assert(orderCountAfter === 12, "Orders table should not be affected by copying malicious-named table")
 
-        targetCount <- copier.targetDb.run(sql"""SELECT COUNT(*) FROM "#$maliciousTableName"""".as[Int].head)
+        targetCount <- copier.target.db.run(sql"""SELECT COUNT(*) FROM "#$maliciousTableName"""".as[Int].head)
         _           <- assert(targetCount === 2, "Target should have 2 rows")
       } yield succeed
     }
@@ -222,9 +222,9 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
       for {
         // First copy
         _            <- copier.run("users", tableSpec.where("id = 1"))
-        count1       <- copier.targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        count1       <- copier.target.db.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
         _            <- assert(count1 === 1)
-        originalName <- copier.targetDb.run(sql"SELECT first_name FROM users WHERE id = 1".as[String].head)
+        originalName <- copier.target.db.run(sql"SELECT first_name FROM users WHERE id = 1".as[String].head)
         _            <- assert(originalName === "John")
         // Second copy with doUpdate on explicit column: should update
         updateSpec    = TableSpec
@@ -232,10 +232,10 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
                           .where("id = 1")
                           .onConflict(OnConflict.doUpdate("id"))
         _            <- copier.run("users", updateSpec)
-        updatedName  <- copier.targetDb.run(sql"SELECT first_name FROM users WHERE id = 1".as[String].head)
+        updatedName  <- copier.target.db.run(sql"SELECT first_name FROM users WHERE id = 1".as[String].head)
         _            <- assert(updatedName === "UPDATED")
         // Count unchanged
-        count2       <- copier.targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        count2       <- copier.target.db.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
         _            <- assert(count2 === 1)
       } yield succeed
     }
@@ -246,11 +246,11 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
       for {
         // First copy
         _      <- copier.run("users", tableSpec.where("id <= 2"))
-        count1 <- copier.targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        count1 <- copier.target.db.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
         _      <- assert(count1 === 2)
         // Second copy with doNothing: existing skipped, new added
         _      <- copier.run("users", tableSpec.where("id <= 4").onConflict(OnConflict.doNothing("id")))
-        count2 <- copier.targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        count2 <- copier.target.db.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
         _      <- assert(count2 === 4) // 2 existing + 2 new
       } yield succeed
     }
@@ -268,7 +268,7 @@ class TableCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfter
       for {
         count       <- copier.run("users", tableSpec)
         _           <- assert(count === 3)
-        targetCount <- copier.targetDb.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
+        targetCount <- copier.target.db.run(sql"SELECT COUNT(*) FROM users".as[Int].head)
         _           <- assert(targetCount === 3)
       } yield succeed
     }
