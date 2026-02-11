@@ -36,7 +36,7 @@ class TableCopier(source: DbContext, val target: DbContext)(implicit ec: Executi
           Future.successful(tableSpec.columns.map(c => c -> typeMap(c.name)))
       }
 
-    val selfRefConstraints = new SelfRefConstraints(target.db, source.schema, tableName)
+    val selfRefConstraints = new SelfRefConstraints(target.db, target.schema, tableName)
 
     val transformedColumns = tableSpec.columns.collect { case c if !c.isInstanceOf[OutputColumn.SourceColumn] => c.name }
     if (transformedColumns.nonEmpty)
