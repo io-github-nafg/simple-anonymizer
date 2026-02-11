@@ -45,7 +45,8 @@ import scala.concurrent.{ExecutionContext, Future}
   */
 class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public", skippedTables: Set[String] = Set.empty)(implicit ec: ExecutionContext) {
   private val sourceDbContext = new DbContext(sourceDb, schema)
-  val tableCopier             = new TableCopier(sourceDbContext, targetDb)
+  private val targetDbContext = new DbContext(targetDb, schema)
+  val tableCopier             = new TableCopier(sourceDbContext, targetDbContext)
 
   private def copyTablesByLevel(
       levels: Seq[Seq[MTable]],

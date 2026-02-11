@@ -13,7 +13,7 @@ import simpleanonymizer.SlickProfile.quoteIdentifier
 private[simpleanonymizer] class SelfRefConstraints(db: Database, schema: String, tableName: String)(implicit
     ec: ExecutionContext
 ) {
-  private val quotedTable = quoteIdentifier(tableName)
+  private val quotedTable = CopyAction.qualifiedTable(schema, tableName)
 
   /** ALTER constraints to DEFERRABLE INITIALLY DEFERRED (requires PostgreSQL 9.4+) */
   def deferAll(constraintNames: Seq[String]): Future[Seq[Int]] =

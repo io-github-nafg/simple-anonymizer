@@ -344,6 +344,53 @@ class DbCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll
 
   }
 
+  describe("sequence reset") {
+    it("allows inserting rows without explicit ID after copy") { fixture =>
+      val copier   =
+        new DbCopier(
+          sourceDb,
+          fixture.targetDb,
+          skippedTables = Set("orders", "order_items", "profiles", "employees", "tree_nodes")
+        )
+      val targetDb = fixture.targetDb
+
+      for {
+        _        <- copier.run(
+                      "users"      -> TableSpec.select(row => Seq(row.first_name, row.last_name, row.email)),
+                      "categories" -> TableSpec.select(row => Seq(row.name))
+                    )
+        maxCopId <- targetDb.run(sql"SELECT MAX(id) FROM users".as[Int].head)
+        // Insert without explicit ID — should use sequence default and not conflict
+        newId    <- targetDb.run(sql"INSERT INTO users (first_name, last_name, email) VALUES ('New', 'User', 'new@test.com') RETURNING id".as[Int].head)
+        _        <- assert(newId > maxCopId, s"New ID ($newId) should be > max copied ID ($maxCopId)")
+      } yield succeed
+    }
+
+    it("allows inserting rows without explicit ID on tables with gaps") { fixture =>
+      val copier   =
+        new DbCopier(
+          sourceDb,
+          fixture.targetDb,
+          skippedTables = Set("order_items", "profiles", "employees", "tree_nodes")
+        )
+      val targetDb = fixture.targetDb
+
+      for {
+        _        <- copier.run(
+                      "users"      ->
+                        TableSpec
+                          .select(row => Seq(row.first_name, row.last_name, row.email))
+                          .where("id <= 3"),
+                      "orders"     -> TableSpec.select(row => Seq(row.status, row.total)),
+                      "categories" -> TableSpec.select(row => Seq(row.name))
+                    )
+        maxCopId <- targetDb.run(sql"SELECT MAX(id) FROM users".as[Int].head)
+        newId    <- targetDb.run(sql"INSERT INTO users (first_name, last_name, email) VALUES ('Another', 'User', 'another@test.com') RETURNING id".as[Int].head)
+        _        <- assert(newId > maxCopId, s"New ID ($newId) should be > max copied ID ($maxCopId)")
+      } yield succeed
+    }
+  }
+
   describe("limit") {
     it("restricts the number of rows copied") { fixture =>
       val copier   =
