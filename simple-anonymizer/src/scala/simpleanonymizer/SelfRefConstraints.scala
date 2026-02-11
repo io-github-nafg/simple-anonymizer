@@ -2,6 +2,8 @@ package simpleanonymizer
 
 import java.sql.DatabaseMetaData
 
+import org.slf4j.LoggerFactory
+
 import scala.concurrent.{ExecutionContext, Future}
 
 import slick.jdbc.meta.{MForeignKey, MQName}
@@ -13,6 +15,7 @@ import simpleanonymizer.SlickProfile.quoteIdentifier
 private[simpleanonymizer] class SelfRefConstraints(db: Database, schema: String, tableName: String)(implicit
     ec: ExecutionContext
 ) {
+  private val logger      = LoggerFactory.getLogger(getClass)
   private val quotedTable = CopyAction.qualifiedTable(schema, tableName)
 
   /** ALTER constraints to DEFERRABLE INITIALLY DEFERRED (requires PostgreSQL 9.4+) */
@@ -38,7 +41,7 @@ private[simpleanonymizer] class SelfRefConstraints(db: Database, schema: String,
         val selfRefFks = allFks.filter(fk => fk.pkTable.name == fk.fkTable.name)
 
         if (selfRefFks.nonEmpty)
-          println(s"[TableCopier] Self-ref constraints for $tableName: ${selfRefFks.flatMap(_.fkName).mkString(", ")}")
+          logger.info("Self-ref constraints for {}: {}", tableName, selfRefFks.flatMap(_.fkName).mkString(", "))
 
         selfRefFks
       }
@@ -55,7 +58,7 @@ private[simpleanonymizer] class SelfRefConstraints(db: Database, schema: String,
       }
       db.run(alterSql)
         .recover { case e =>
-          println(s"[TableCopier] Warning: failed to restore constraint $name: ${e.getMessage}")
+          logger.warn(s"Failed to restore constraint $name", e)
           0
         }
     }

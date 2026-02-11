@@ -1,8 +1,11 @@
 package simpleanonymizer
 
+import org.slf4j.LoggerFactory
+
 import scala.concurrent.{ExecutionContext, Future}
 
 class CoverageValidator private (dbContext: DbContext)(implicit ec: ExecutionContext) {
+  private val logger                                                     = LoggerFactory.getLogger(getClass)
   private lazy val fkColumnsByTableFut: Future[Map[String, Set[String]]] =
     dbContext.allForeignKeys.map(DbContext.fkColumnsByTable)
 
@@ -82,7 +85,7 @@ class CoverageValidator private (dbContext: DbContext)(implicit ec: ExecutionCon
     for {
       _ <- ensureAllTables(tableNames, skippedTables, tableSpecs.keySet)
       _ <- ensureAllColumns(tableSpecs)
-      _  = println(s"[CoverageValidator] Validation passed.")
+      _  = logger.info("Validation passed.")
     } yield ()
 }
 

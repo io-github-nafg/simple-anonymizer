@@ -1,5 +1,7 @@
 package simpleanonymizer
 
+import org.slf4j.LoggerFactory
+
 import scala.concurrent.{ExecutionContext, Future}
 
 import simpleanonymizer.SlickProfile.api._
@@ -13,6 +15,7 @@ import simpleanonymizer.SlickProfile.api._
   *   Schema metadata for the source database. Used for column type lookups and resolving PK-based conflict targets (`upsertOnPk` / `skipConflictOnPk`).
   */
 class TableCopier(source: DbContext, val target: DbContext)(implicit ec: ExecutionContext) {
+  private val logger                                            = LoggerFactory.getLogger(getClass)
   /*
    @param tableSpec
    *   `columns` define <b>exactly</b> which columns are SELECTed from the source and INSERTed into target — there is no automatic passthrough. Every column that
@@ -40,7 +43,7 @@ class TableCopier(source: DbContext, val target: DbContext)(implicit ec: Executi
 
     val transformedColumns = tableSpec.columns.collect { case c if !c.isInstanceOf[OutputColumn.SourceColumn] => c.name }
     if (transformedColumns.nonEmpty)
-      println(s"[TableCopier] Transforming columns of $tableName: ${transformedColumns.mkString(", ")}")
+      logger.info("Transforming columns of {}: {}", tableName, transformedColumns.mkString(", "))
 
     selfRefConstraints.restoringDeferrability { constraints =>
       for {
@@ -75,7 +78,7 @@ class TableCopier(source: DbContext, val target: DbContext)(implicit ec: Executi
                 .head
             )
             .map { newVal =>
-              println(s"[TableCopier] Reset sequence ${seq.sequenceName} to $newVal for $tableName.${seq.columnName}")
+              logger.info("Reset sequence {} to {} for {}.{}", seq.sequenceName, newVal, tableName, seq.columnName)
             }
         }
         .map(_ => ())

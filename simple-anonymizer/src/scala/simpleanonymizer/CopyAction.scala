@@ -2,6 +2,8 @@ package simpleanonymizer
 
 import java.sql.Connection
 
+import org.slf4j.LoggerFactory
+
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
@@ -29,6 +31,8 @@ private[simpleanonymizer] class CopyAction(
     columns: Seq[(OutputColumn, String)]
 )(implicit executionContext: ExecutionContext)
     extends SynchronousDatabaseAction[Int, NoStream, JdbcBackend#JdbcActionContext, JdbcBackend#JdbcStreamingActionContext, Effect.All] {
+
+  private val logger = LoggerFactory.getLogger(getClass)
 
   override type StreamState = Null
 
@@ -74,11 +78,11 @@ private[simpleanonymizer] class CopyAction(
         limit.fold("")(n => s" LIMIT $n")
     }
 
-    println(s"[TableCopier] SELECT: $selectSql")
+    logger.debug("SELECT: {}", selectSql)
 
     val totalRowsFut = sourceDbContext.db.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head)
-    totalRowsFut.foreach(n => println(s"[TableCopier] Table $tableName has $n rows"))
-    println(s"[TableCopier] Copying table: $tableName")
+    totalRowsFut.foreach(n => logger.info("Table {} has {} rows", tableName, n))
+    logger.info("Copying table: {}", tableName)
 
     val insertSql = {
       val columnList                                                              = columns.map(c => quoteIdentifier(c._1.name)).mkString(", ")
@@ -136,6 +140,8 @@ private[simpleanonymizer] class CopyAction(
 object CopyAction {
   private[simpleanonymizer] def qualifiedTable(schema: String, tableName: String): String =
     s"${quoteIdentifier(schema)}.${quoteIdentifier(tableName)}"
+
+  private val logger = LoggerFactory.getLogger(getClass)
 
   /** Buffers rows and inserts them in batches via JDBC prepared statements.
     *
@@ -206,7 +212,7 @@ object CopyAction {
         buffer.clear()
         val now = System.currentTimeMillis()
         if (now - lastLogTime >= 5000) {
-          println(s"[TableCopier] Inserted $count$totalSuffix rows into $quotedTable...")
+          logger.info("Inserted {}{} rows into {}...", count, totalSuffix, quotedTable)
           lastLogTime = now
         }
       }
@@ -217,7 +223,7 @@ object CopyAction {
       try {
         if (buffer.nonEmpty)
           count += insertBatch(buffer.toVector)
-        println(s"[TableCopier] Copied $count$totalSuffix rows from $quotedTable")
+        logger.info("Copied {}{} rows from {}", count, totalSuffix, quotedTable)
         count
       } finally
         stmt.close()

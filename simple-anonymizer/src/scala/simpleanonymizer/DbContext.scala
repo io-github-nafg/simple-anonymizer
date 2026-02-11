@@ -1,5 +1,7 @@
 package simpleanonymizer
 
+import org.slf4j.LoggerFactory
+
 import simpleanonymizer.SlickProfile.api._
 import slick.jdbc.meta.{MForeignKey, MQName, MTable}
 import scala.concurrent.{ExecutionContext, Future}
@@ -15,32 +17,33 @@ import slick.jdbc.GetResult
   * used standalone, it creates its own instance (or accepts one via constructor parameter).
   */
 class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionContext) {
+  private val logger = LoggerFactory.getLogger(getClass)
 
   /** All tables in the schema, sorted by name. */
   lazy val allTables: Future[Seq[MTable]] = {
-    println("[DbContext] Fetching tables...")
+    logger.info("Fetching tables...")
     db.run(
       MTable.getTables(None, Some(schema), None, Some(Seq("TABLE"))).map(_.sortBy(_.name.name))
     ).map { tables =>
-      println(s"[DbContext] Found ${tables.size} tables.")
+      logger.info("Found {} tables.", tables.size)
       tables
     }
   }
 
   /** All foreign key relationships in the schema. */
   lazy val allForeignKeys: Future[Seq[MForeignKey]] = {
-    println("[DbContext] Fetching foreign keys...")
+    logger.info("Fetching foreign keys...")
     db.run(
       MForeignKey.getImportedKeys(MQName(None, Some(schema), null))
     ).map { fks =>
-      println(s"[DbContext] Found ${fks.size} foreign keys.")
+      logger.info("Found {} foreign keys.", fks.size)
       fks
     }
   }
 
   /** All column (name, data_type) pairs grouped by table name. Single bulk query serves both column-name and column-type lookups. */
   private lazy val allColumnInfo: Future[Map[String, Map[String, String]]] = {
-    println("[DbContext] Fetching columns...")
+    logger.info("Fetching columns...")
     db.run(
       sql"""
         SELECT table_name, column_name, data_type
@@ -72,7 +75,7 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
 
   /** All sequence-backed columns (SERIAL, BIGSERIAL, GENERATED AS IDENTITY). */
   lazy val allSequences: Future[Seq[DbContext.SequenceInfo]] = {
-    println("[DbContext] Fetching sequences...")
+    logger.info("Fetching sequences...")
     db.run(
       sql"""
         SELECT t.relname, a.attname, s.relname
@@ -88,14 +91,14 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
           AND d.deptype IN ('a', 'i')
       """.as[DbContext.SequenceInfo]
     ).map { seqs =>
-      println(s"[DbContext] Found ${seqs.size} sequences.")
+      logger.info("Found {} sequences.", seqs.size)
       seqs
     }
   }
 
   /** All primary key column names grouped by table name. */
   lazy val allPrimaryKeys: Future[Map[String, Set[String]]] = {
-    println("[DbContext] Fetching primary keys...")
+    logger.info("Fetching primary keys...")
     db.run(
       sql"""
         SELECT c.relname, a.attname
@@ -110,7 +113,7 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
     )
   }
 }
-object DbContext {
+object DbContext                                                                     {
   case class SequenceInfo(tableName: String, columnName: String, sequenceName: String)
   object SequenceInfo {
     implicit val getSequenceInfo: GetResult[SequenceInfo] = GetResult(r => SequenceInfo(r.<<, r.<<, r.<<))
