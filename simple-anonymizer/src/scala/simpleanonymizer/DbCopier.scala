@@ -60,18 +60,20 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
 
     levels.foldLeft(Future.successful(Map.empty[String, Int])) { (accFut, level) =>
       accFut.flatMap { acc =>
-        Future
-          .traverse(level) { table =>
-            val tableName = table.name.name
-            if (skippedTables.contains(tableName)) {
-              logger.info("Skipping table: {}", tableName)
-              Future.successful(tableName -> 0)
-            } else
-              tableCopier
-                .run(tableName, specs.getOrElse(tableName, TableSpec(Seq.empty)))
-                .map(count => tableName -> count)
-          }
-          .map(results => acc ++ results)
+        // Eagerly create all futures so tables within a level copy in parallel.
+        // Future.traverse in Scala 2.13+ is sequential (each future starts only
+        // after the previous one completes).
+        val futures = level.map { table =>
+          val tableName = table.name.name
+          if (skippedTables.contains(tableName)) {
+            logger.info("Skipping table: {}", tableName)
+            Future.successful(tableName -> 0)
+          } else
+            tableCopier
+              .run(tableName, specs.getOrElse(tableName, TableSpec(Seq.empty)))
+              .map(count => tableName -> count)
+        }
+        Future.sequence(futures).map(results => acc ++ results)
       }
     }
   }
