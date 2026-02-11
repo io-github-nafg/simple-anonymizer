@@ -1,5 +1,7 @@
 package simpleanonymizer
 
+import org.slf4j.LoggerFactory
+
 import slick.jdbc.meta.{MForeignKey, MTable}
 
 import scala.annotation.tailrec
@@ -13,6 +15,7 @@ import scala.annotation.tailrec
   * This ensures parent tables are populated before child tables that reference them.
   */
 object TableSorter {
+  private val logger = LoggerFactory.getLogger(getClass)
 
   /** Compute insertion levels for tables based on FK dependencies.
     *
@@ -53,9 +56,9 @@ object TableSorter {
         }
         if (newlyAssigned.isEmpty) {
           // Circular dependency detected - no progress possible
-          println(
-            s"[TableSorter] WARNING: Circular dependencies detected for tables: ${unassigned.mkString(", ")}. " +
-              "These tables will not be copied."
+          logger.warn(
+            "Circular dependencies detected for tables: {}. These tables will not be copied.",
+            unassigned.mkString(", ")
           )
           levels
         } else

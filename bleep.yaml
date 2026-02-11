@@ -17,6 +17,7 @@ projects:
     - com.typesafe.slick::slick:3.6.1
     - com.github.tminglei::slick-pg:0.23.1
     - com.github.tminglei::slick-pg_circe-json:0.23.1
+    - org.slf4j:slf4j-api:2.0.16
     extends: template-cross-all
   tests:
     dependencies:

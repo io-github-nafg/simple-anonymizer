@@ -1,5 +1,7 @@
 package simpleanonymizer
 
+import org.slf4j.LoggerFactory
+
 import io.circe.Json
 import io.circe.parser.parse
 import io.circe.syntax._
@@ -30,6 +32,7 @@ sealed trait Lens {
 }
 
 object Lens {
+  private val logger = LoggerFactory.getLogger(getClass)
 
   /** Direct lens - applies the transformation directly to the string without JSON parsing.
     *
@@ -45,7 +48,7 @@ object Lens {
     protected def modifyJson(f: String => String): Json => Json = { json =>
       json.asString match {
         case None      =>
-          System.err.println(s"[Lens] Warning: expected string but got ${json.name}")
+          logger.warn("Expected string but got {}", json.name)
           json
         case Some(str) =>
           val transformed = f(str)
@@ -60,7 +63,7 @@ object Lens {
       parse(jsonStr) match {
         case Right(json) => modifyJson(f)(json).noSpaces
         case Left(err)   =>
-          System.err.println(s"[Lens] Warning: failed to parse JSON: ${err.message}")
+          logger.warn("Failed to parse JSON: {}", err.message)
           jsonStr
       }
     }
@@ -82,7 +85,7 @@ object Lens {
     protected def modifyJson(f: String => String): Json => Json = { json =>
       json.asObject match {
         case None      =>
-          System.err.println(s"[Lens] Warning: expected object but got ${json.name}")
+          logger.warn("Expected object but got {}", json.name)
           json
         case Some(obj) =>
           obj(fieldName) match {
@@ -90,7 +93,7 @@ object Lens {
               val transformed = inner.modifyJson(f)(fieldValue)
               obj.add(fieldName, transformed).asJson
             case None             =>
-              System.err.println(s"[Lens] Warning: field '$fieldName' not found in JSON object")
+              logger.warn("Field '{}' not found in JSON object", fieldName)
               json
           }
       }
@@ -106,7 +109,7 @@ object Lens {
     protected def modifyJson(f: String => String): Json => Json = { json =>
       json.asArray match {
         case None      =>
-          System.err.println(s"[Lens] Warning: expected array but got ${json.name}")
+          logger.warn("Expected array but got {}", json.name)
           json
         case Some(arr) =>
           val transformed = arr.map(elementLens.modifyJson(f))

@@ -1,5 +1,7 @@
 package simpleanonymizer
 
+import org.slf4j.LoggerFactory
+
 import slick.jdbc.meta.MTable
 
 import simpleanonymizer.SlickProfile.api._
@@ -44,6 +46,7 @@ import scala.concurrent.{ExecutionContext, Future}
   *   }}}
   */
 class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public", skippedTables: Set[String] = Set.empty)(implicit ec: ExecutionContext) {
+  private val logger          = LoggerFactory.getLogger(getClass)
   private val sourceDbContext = new DbContext(sourceDb, schema)
   private val targetDbContext = new DbContext(targetDb, schema)
   val tableCopier             = new TableCopier(sourceDbContext, targetDbContext)
@@ -53,7 +56,7 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
       specs: Map[String, TableSpec]
   ): Future[Map[String, Int]] = {
     val totalTables = levels.map(_.size).sum
-    println(s"[DbCopier] Copying $totalTables tables in ${levels.size} levels...")
+    logger.info("Copying {} tables in {} levels...", totalTables, levels.size)
 
     levels.foldLeft(Future.successful(Map.empty[String, Int])) { (accFut, level) =>
       accFut.flatMap { acc =>
@@ -61,7 +64,7 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
           .traverse(level) { table =>
             val tableName = table.name.name
             if (skippedTables.contains(tableName)) {
-              println(s"[DbCopier] Skipping table: $tableName")
+              logger.info("Skipping table: {}", tableName)
               Future.successful(tableName -> 0)
             } else
               tableCopier
