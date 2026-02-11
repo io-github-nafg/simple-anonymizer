@@ -45,8 +45,8 @@ class FilterPropagationTest extends AnyFunSpec with TypeCheckedTripleEquals {
         }
 
       assert(!filters.contains("users"))
-      assert(filters("orders").sql === "user_id IN (SELECT id FROM users WHERE active = true)")
-      assert(filters("order_items").sql.contains("order_id IN (SELECT id FROM orders WHERE"))
+      assert(filters("orders").sql === """"user_id" IN (SELECT "id" FROM "users" WHERE active = true)""")
+      assert(filters("order_items").sql.contains(""""order_id" IN (SELECT "id" FROM "orders" WHERE"""))
     }
 
     it("omits tables with no filter") {
@@ -75,8 +75,8 @@ class FilterPropagationTest extends AnyFunSpec with TypeCheckedTripleEquals {
 
       val clauses = filters("order_items").clauses
       assert(clauses.size === 2)
-      assert(clauses.exists(_.contains("order_id IN (SELECT id FROM orders WHERE status = 'active')")))
-      assert(clauses.exists(_.contains("product_id IN (SELECT id FROM products WHERE available = true)")))
+      assert(clauses.exists(_.contains(""""order_id" IN (SELECT "id" FROM "orders" WHERE status = 'active')""")))
+      assert(clauses.exists(_.contains(""""product_id" IN (SELECT "id" FROM "products" WHERE available = true)""")))
     }
 
     it("ANDs multiple parent clauses in the propagated subquery") {
@@ -88,7 +88,7 @@ class FilterPropagationTest extends AnyFunSpec with TypeCheckedTripleEquals {
           case _       => None
         }
 
-      assert(filters("orders").sql === "user_id IN (SELECT id FROM users WHERE (active = true) AND (role = 'admin'))")
+      assert(filters("orders").sql === """"user_id" IN (SELECT "id" FROM "users" WHERE (active = true) AND (role = 'admin'))""")
     }
   }
 }

@@ -12,19 +12,23 @@ INSERT INTO users (first_name, last_name, email) VALUES
     ('Christopher', 'Moore', 'cmoore@sample.org'),
     ('Amanda', 'Taylor', 'amanda.taylor@mail.com');
 
--- Children reference parents with higher IDs to exercise self-referencing FK handling.
--- Physical row order puts children before parents to trigger FK violations across batches.
-INSERT INTO categories (id, name, parent_id) VALUES
-    (4, 'Smartphones', NULL),
-    (5, 'Laptops', NULL),
-    (6, 'Tablets', NULL),
-    (7, 'Mens Clothing', NULL),
-    (8, 'Womens Clothing', NULL),
-    (9, 'Fiction', NULL),
-    (10, 'Non-Fiction', NULL),
-    (1, 'Electronics', NULL),
-    (2, 'Clothing', NULL),
-    (3, 'Books', NULL);
+-- Self-referencing FK: parent_id -> categories(id). Cross-table FK: owner_id -> users(id).
+-- Physical insert order puts children before parents to stress batch FK handling.
+--
+-- Edge case: Fiction (id=9, owner_id=1) is a child of Books (id=3, owner_id=3).
+-- When subsetting to owner_id IN (1,2), Fiction individually matches but its parent doesn't,
+-- so Fiction should be excluded.
+INSERT INTO categories (id, name, owner_id, parent_id) VALUES
+    (4, 'Smartphones', 1, NULL),
+    (5, 'Laptops', 1, NULL),
+    (6, 'Tablets', 1, NULL),
+    (7, 'Mens Clothing', 2, NULL),
+    (8, 'Womens Clothing', 2, NULL),
+    (9, 'Fiction', 1, NULL),
+    (10, 'Non-Fiction', 3, NULL),
+    (1, 'Electronics', 1, NULL),
+    (2, 'Clothing', 2, NULL),
+    (3, 'Books', 3, NULL);
 UPDATE categories SET parent_id = 1 WHERE id = 4;
 UPDATE categories SET parent_id = 1 WHERE id = 5;
 UPDATE categories SET parent_id = 1 WHERE id = 6;
@@ -76,24 +80,31 @@ INSERT INTO orders (user_id, total, status) VALUES
     (9, 99.00, 'completed'),
     (10, 1599.99, 'processing');
 
-INSERT INTO order_items (order_id, product_name, quantity) VALUES
-    (1, 'iPhone 15 Pro', 1),
-    (1, 'Phone Case', 2),
-    (2, 'Wireless Earbuds', 1),
-    (3, 'Cotton T-Shirt', 3),
-    (4, 'MacBook Pro 14 inch', 1),
-    (4, 'USB-C Cable', 2),
-    (4, 'Laptop Sleeve', 1),
-    (5, 'Programming Book', 1),
-    (6, 'Smart Watch', 1),
-    (6, 'Watch Band', 1),
-    (7, 'Running Shoes', 1),
-    (8, 'Summer Dress', 2),
-    (9, 'Bluetooth Speaker', 1),
-    (9, 'HDMI Cable', 1),
-    (10, 'Fitness Tracker', 1),
-    (11, 'Novel - Fiction', 2),
-    (12, 'Gaming Laptop', 1);
+-- category_id FK to categories enables testing that subsetting propagates through
+-- a self-referencing table to downstream tables.
+--
+-- Edge case: Poetry Anthology (order_id=3/user_id=2, category_id=9/Fiction).
+-- When subsetting to users 1-2, this item's order qualifies but its category doesn't
+-- (Fiction is excluded per the categories edge case above).
+INSERT INTO order_items (order_id, product_name, quantity, category_id) VALUES
+    (1, 'iPhone 15 Pro', 1, 4),
+    (1, 'Phone Case', 2, 4),
+    (2, 'Wireless Earbuds', 1, 1),
+    (3, 'Cotton T-Shirt', 3, 7),
+    (4, 'MacBook Pro 14 inch', 1, 5),
+    (4, 'USB-C Cable', 2, 1),
+    (4, 'Laptop Sleeve', 1, 5),
+    (5, 'Programming Book', 1, 10),
+    (6, 'Smart Watch', 1, 1),
+    (6, 'Watch Band', 1, 1),
+    (7, 'Running Shoes', 1, 7),
+    (8, 'Summer Dress', 2, 8),
+    (9, 'Bluetooth Speaker', 1, 1),
+    (9, 'HDMI Cable', 1, 1),
+    (10, 'Fitness Tracker', 1, 1),
+    (11, 'Novel - Fiction', 2, 9),
+    (12, 'Gaming Laptop', 1, 5),
+    (3, 'Poetry Anthology', 1, 9);
 
 INSERT INTO profiles (user_id, phones, settings) VALUES
     (1, '[{"type":"mobile","number":"555-0101"},{"type":"home","number":"555-0102"}]',
