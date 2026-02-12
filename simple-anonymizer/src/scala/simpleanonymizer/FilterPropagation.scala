@@ -35,15 +35,17 @@ object FilterPropagation {
   ): TableSpec.WhereClause.Single = {
     val table            = quoteQualified(fk.fkTable)
     val (fkCols, pkCols) = quotedCols(fk)
-    val pkColList        = pkCols.mkString(", ")
+    val cteName          = s"_reachable_${fk.fkTable.name}"
+    val cteCols          = fk.columns.map(c => quoteIdentifier(s"_r_${c._2}"))
+    val cteColList       = cteCols.mkString(", ")
     val nullCheck        = fkCols.map(c => s"$c IS NULL").mkString(" AND ")
-    val joinCond         = fkCols.zip(pkCols).map { case (fc, pc) => s"t.$fc = r.$pc" }.mkString(" AND ")
+    val joinCond         = fkCols.zip(cteCols).map { case (fc, cc) => s"t.$fc = r.$cc" }.mkString(" AND ")
     val filterSql        = baseFilter.sql
     val cte              = recursiveCte(
-      "reachable",
-      pkColList,
-      base = s"SELECT $pkColList FROM $table WHERE ($filterSql) AND $nullCheck",
-      recursive = s"SELECT ${pkCols.map(c => s"t.$c").mkString(", ")} FROM $table t JOIN reachable r ON $joinCond WHERE ($filterSql)"
+      cteName,
+      cteColList,
+      base = s"SELECT ${pkCols.mkString(", ")} FROM $table WHERE ($filterSql) AND $nullCheck",
+      recursive = s"SELECT ${pkCols.map(c => s"t.$c").mkString(", ")} FROM $table t JOIN $cteName r ON $joinCond WHERE ($filterSql)"
     )
     TableSpec.WhereClause.Single(s"($nullCheck OR ${inSubquery(fkCols, cte)})")
   }
@@ -79,19 +81,17 @@ object FilterPropagation {
       remaining match {
         case Nil           => accumulated
         case table :: rest =>
-          val tableFks    = fksByChild(table)
-          val sortedFks   = tableFks.sortBy(fk => if (fk.isSelfRef) 1 else 0)
-          val whereClause =
-            sortedFks
-              .foldLeft(Option.empty[TableSpec.WhereClause]) { (acc, fk) =>
-                if (fk.isSelfRef) {
-                  val baseFilter = TableSpec.WhereClause.combine(explicitClauses(table), acc)
-                  TableSpec.WhereClause.combine(acc, baseFilter.map(selfRefCteExpr(fk, _)))
-                } else {
-                  val parentEffective = TableSpec.WhereClause.combine(explicitClauses(fk.pkTable.name), accumulated.get(fk.pkTable.name))
-                  TableSpec.WhereClause.combine(acc, parentEffective.map(inExpr(fk, _)))
-                }
-              }
+          val (selfRefFks, crossRefFks) = fksByChild(table).partition(_.isSelfRef)
+          val crossRefClause            =
+            crossRefFks.foldLeft(Option.empty[TableSpec.WhereClause]) { (acc, fk) =>
+              val parentEffective = TableSpec.WhereClause.combine(explicitClauses(fk.pkTable.name), accumulated.get(fk.pkTable.name))
+              TableSpec.WhereClause.combine(acc, parentEffective.map(inExpr(fk, _)))
+            }
+          val baseFilter                = TableSpec.WhereClause.combine(explicitClauses(table), crossRefClause)
+          val whereClause               =
+            selfRefFks.foldLeft(crossRefClause) { (acc, fk) =>
+              TableSpec.WhereClause.combine(acc, baseFilter.map(selfRefCteExpr(fk, _)))
+            }
           loop(rest, accumulated ++ whereClause.map(table -> _))
       }
 
