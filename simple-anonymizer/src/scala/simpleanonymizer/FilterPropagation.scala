@@ -18,26 +18,56 @@ object FilterPropagation {
       case None    => quoteIdentifier(mqName.name)
     }
 
-  private def inExpr(fk: MForeignKey, parentClause: TableSpec.WhereClause): TableSpec.WhereClause.Single =
+  /** A logical FK constraint, possibly composite (multiple column pairs). */
+  private case class LogicalFK(
+      fkTable: MQName,
+      pkTable: MQName,
+      columns: Seq[(String, String)] // (fkColumn, pkColumn) pairs
+  ) {
+    def isSelfRef: Boolean = pkTable.name == fkTable.name
+  }
+
+  private def groupFKs(fks: Seq[MForeignKey]): Seq[LogicalFK] = {
+    def toLogicalFK(group: Seq[MForeignKey]): LogicalFK = {
+      val sorted = group.sortBy(_.keySeq)
+      LogicalFK(sorted.head.fkTable, sorted.head.pkTable, sorted.map(fk => (fk.fkColumn, fk.pkColumn)))
+    }
+    val (named, unnamed)                                = fks.partition(_.fkName.isDefined)
+    val namedGroups                                     = named.groupBy(fk => (fk.fkTable.name, fk.pkTable.name, fk.fkName)).values.map(toLogicalFK)
+    val unnamedGroups                                   = unnamed.map(fk => toLogicalFK(Seq(fk)))
+    (namedGroups ++ unnamedGroups).toSeq
+  }
+
+  private def quotedCols(fk: LogicalFK): (Seq[String], Seq[String]) =
+    (fk.columns.map(c => quoteIdentifier(c._1)), fk.columns.map(c => quoteIdentifier(c._2)))
+
+  private def sqlTuple(cols: Seq[String]): String =
+    if (cols.size == 1) cols.head else cols.mkString("(", ", ", ")")
+
+  private def inExpr(fk: LogicalFK, parentClause: TableSpec.WhereClause): TableSpec.WhereClause.Single = {
+    val (fkCols, pkCols) = quotedCols(fk)
     TableSpec.WhereClause.Single(
-      s"${quoteIdentifier(fk.fkColumn)} IN (SELECT ${quoteIdentifier(fk.pkColumn)} FROM ${qualifiedName(fk.pkTable)} WHERE ${parentClause.sql})"
+      s"${sqlTuple(fkCols)} IN (SELECT ${pkCols.mkString(", ")} FROM ${qualifiedName(fk.pkTable)} WHERE ${parentClause.sql})"
     )
+  }
 
   private def selfRefCteExpr(
-      fk: MForeignKey,
+      fk: LogicalFK,
       baseFilter: TableSpec.WhereClause
   ): TableSpec.WhereClause.Single = {
-    val table     = qualifiedName(fk.fkTable)
-    val fkCol     = quoteIdentifier(fk.fkColumn)
-    val pkCol     = quoteIdentifier(fk.pkColumn)
-    val filterSql = baseFilter.sql
+    val table            = qualifiedName(fk.fkTable)
+    val (fkCols, pkCols) = quotedCols(fk)
+    val pkColList        = pkCols.mkString(", ")
+    val nullCheck        = fkCols.map(c => s"$c IS NULL").mkString(" AND ")
+    val joinCond         = fkCols.zip(pkCols).map { case (fc, pc) => s"t.$fc = r.$pc" }.mkString(" AND ")
+    val filterSql        = baseFilter.sql
     TableSpec.WhereClause.Single(
-      s"($fkCol IS NULL OR $fkCol IN (" +
-        s"WITH RECURSIVE reachable($pkCol) AS (" +
-        s"SELECT $pkCol FROM $table WHERE ($filterSql) AND $fkCol IS NULL " +
+      s"($nullCheck OR ${sqlTuple(fkCols)} IN (" +
+        s"WITH RECURSIVE reachable($pkColList) AS (" +
+        s"SELECT $pkColList FROM $table WHERE ($filterSql) AND $nullCheck " +
         s"UNION " +
-        s"SELECT t.$pkCol FROM $table t JOIN reachable r ON t.$fkCol = r.$pkCol WHERE ($filterSql)" +
-        s") SELECT $pkCol FROM reachable))"
+        s"SELECT ${pkCols.map(c => s"t.$c").mkString(", ")} FROM $table t JOIN reachable r ON $joinCond WHERE ($filterSql)" +
+        s") SELECT $pkColList FROM reachable))"
     )
   }
 
@@ -65,7 +95,8 @@ object FilterPropagation {
       tables: Seq[String],
       fks: Seq[MForeignKey]
   )(explicitClauses: String => Option[TableSpec.WhereClause]): Map[String, TableSpec.WhereClause] = {
-    val fksByChild = fks.groupBy(_.fkTable.name).withDefaultValue(Nil)
+    val logicalFks = groupFKs(fks)
+    val fksByChild = logicalFks.groupBy(_.fkTable.name).withDefaultValue(Nil)
 
     @tailrec
     def loop(remaining: List[String], accumulated: Map[String, TableSpec.WhereClause]): Map[String, TableSpec.WhereClause] =
@@ -73,12 +104,11 @@ object FilterPropagation {
         case Nil           => accumulated
         case table :: rest =>
           val tableFks    = fksByChild(table)
-          val isSelfRef   = (fk: MForeignKey) => fk.pkTable.name == table
-          val sortedFks   = tableFks.sortBy(fk => if (isSelfRef(fk)) 1 else 0)
+          val sortedFks   = tableFks.sortBy(fk => if (fk.isSelfRef) 1 else 0)
           val whereClause =
             sortedFks
               .foldLeft(Option.empty[TableSpec.WhereClause]) { (acc, fk) =>
-                if (isSelfRef(fk)) {
+                if (fk.isSelfRef) {
                   val baseFilter = TableSpec.WhereClause.combine(explicitClauses(table), acc)
                   TableSpec.WhereClause.combine(acc, baseFilter.map(selfRefCteExpr(fk, _)))
                 } else {
