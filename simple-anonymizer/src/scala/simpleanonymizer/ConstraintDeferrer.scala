@@ -3,6 +3,7 @@ package simpleanonymizer
 import java.sql.DatabaseMetaData
 
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Failure, Success}
 
 import slick.jdbc.meta.MForeignKey
 
@@ -19,28 +20,31 @@ class ConstraintDeferrer(db: Database)(implicit ec: ExecutionContext) {
   private val logger = LoggerFactory.getLogger(getClass)
 
   /** ALTER constraints to DEFERRABLE INITIALLY DEFERRED (requires PostgreSQL 9.4+) */
-  private def deferAll(constraints: Seq[MForeignKey]): Future[Seq[Int]] = {
+  private def deferAll(constraints: Seq[MForeignKey]) = {
     val named = constraints.flatMap(fk => fk.fkName.map(fk.fkTable -> _)).distinct
-    Future
+    DBIO
       .traverse(named) { case (table, name) =>
-        val qt = quoteQualified(table)
-        db.run(sqlu"ALTER TABLE #$qt ALTER CONSTRAINT #${quoteIdentifier(name)} DEFERRABLE INITIALLY DEFERRED")
+        sqlu"ALTER TABLE #${quoteQualified(table)} ALTER CONSTRAINT #${quoteIdentifier(name)} DEFERRABLE INITIALLY DEFERRED"
       }
-      .recoverWith { case e =>
-        val tableNames = named.map(_._1.name).distinct.mkString(", ")
-        Future.failed(
-          new RuntimeException(
-            s"Failed to make constraints deferrable on $tableNames. ALTER TABLE ... ALTER CONSTRAINT requires PostgreSQL 9.4+.",
-            e
+      .transactionally
+      .asTry
+      .flatMap {
+        case Success(value) => DBIO.successful(value)
+        case Failure(e)     =>
+          val tableNames = named.map(_._1.name).distinct.mkString(", ")
+          DBIO.failed(
+            new RuntimeException(
+              s"Failed to make constraints deferrable on $tableNames. ALTER TABLE ... ALTER CONSTRAINT requires PostgreSQL 9.4+.",
+              e
+            )
           )
-        )
       }
   }
 
   /** ALTER each constraint back to its original deferrability state. Failures are logged but don't propagate. */
-  private def restoreDeferrability(constraints: Seq[MForeignKey]): Future[Seq[Int]] = {
+  private def restoreDeferrability(constraints: Seq[MForeignKey]) = {
     val namedConstraints = constraints.flatMap(fk => fk.fkName.map(name => (fk.fkTable, name, fk.deferrability))).distinct
-    Future.traverse(namedConstraints) { case (table, name, deferrability) =>
+    DBIO.traverse(namedConstraints) { case (table, name, deferrability) =>
       val qt         = quoteQualified(table)
       val quotedName = quoteIdentifier(name)
       val alterSql   = deferrability match {
@@ -51,11 +55,12 @@ class ConstraintDeferrer(db: Database)(implicit ec: ExecutionContext) {
         case _                                              =>
           sqlu"ALTER TABLE #$qt ALTER CONSTRAINT #$quotedName NOT DEFERRABLE"
       }
-      db.run(alterSql)
-        .recover { case e =>
+      alterSql.asTry.map {
+        case Success(value) => value
+        case Failure(e)     =>
           logger.warn(s"Failed to restore constraint $name", e)
           0
-        }
+      }
     }
   }
 
@@ -74,9 +79,9 @@ class ConstraintDeferrer(db: Database)(implicit ec: ExecutionContext) {
     else {
       val tableNames = constraints.map(_.fkTable.name).distinct.mkString(", ")
       logger.info("Deferring constraints for {}: {}", tableNames, constraintNames.mkString(", "))
-      deferAll(constraints).flatMap { _ =>
+      db.run(deferAll(constraints)).flatMap { _ =>
         body.transformWith { outcome =>
-          restoreDeferrability(constraints).transform(_ => outcome)
+          db.run(restoreDeferrability(constraints)).transform(_ => outcome)
         }
       }
     }
