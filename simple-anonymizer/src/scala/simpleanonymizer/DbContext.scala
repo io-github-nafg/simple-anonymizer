@@ -25,7 +25,7 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
     db.run(
       MTable.getTables(None, Some(schema), None, Some(Seq("TABLE"))).map(_.sortBy(_.name.name))
     ).map { tables =>
-      logger.info("Found {} tables.", tables.size)
+      logger.info(s"Found ${tables.size} tables.")
       tables
     }
   }
@@ -36,7 +36,7 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
     db.run(
       MForeignKey.getImportedKeys(MQName(None, Some(schema), null))
     ).map { fks =>
-      logger.info("Found {} foreign keys.", fks.size)
+      logger.info(s"Found ${fks.size} foreign keys.")
       fks
     }
   }
@@ -91,7 +91,7 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
           AND d.deptype IN ('a', 'i')
       """.as[DbContext.SequenceInfo]
     ).map { seqs =>
-      logger.info("Found {} sequences.", seqs.size)
+      logger.info(s"Found ${seqs.size} sequences.")
       seqs
     }
   }
