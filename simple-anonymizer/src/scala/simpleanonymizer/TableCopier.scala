@@ -34,14 +34,13 @@ class TableCopier(source: DbContext, val target: DbContext)(implicit ec: Executi
         }
     }
 
-  /*
-   * @param tableSpec
-   *   `columns` define <b>exactly</b> which columns are SELECTed from the source and INSERTed into target — there is no automatic passthrough. Every column
-   *   that should appear in the INSERT must be listed, including PK and FK columns if the target table requires them. Columns with database defaults (SERIAL,
-   *   nullable, DEFAULT) can be omitted. If a required column is missing, the INSERT will fail with a database error at runtime.
-   *
-   * <b>Note:</b> [[DbCopier]] automatically adds passthrough columns for any database columns not in the spec (including PKs and FKs).
-   */
+  /** @param tableSpec
+    *   `columns` define <b>exactly</b> which columns are SELECTed from the source and INSERTed into target — there is no automatic passthrough. Every column
+    *   that should appear in the INSERT must be listed, including PK and FK columns if the target table requires them. Columns with database defaults (SERIAL,
+    *   nullable, DEFAULT) can be omitted. If a required column is missing, the INSERT will fail with a database error at runtime.
+    *
+    * <b>Note:</b> [[DbCopier]] automatically adds passthrough columns for any database columns not in the spec (including PKs and FKs).
+    */
   def run(tableName: String, tableSpec: TableSpec): Future[Int] = {
     def columnTypesFut: Future[Seq[(OutputColumn, String)]] =
       source.columnTypesFor(tableName).flatMap { typeMap =>
