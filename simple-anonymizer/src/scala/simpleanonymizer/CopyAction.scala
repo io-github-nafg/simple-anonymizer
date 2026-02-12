@@ -2,19 +2,19 @@ package simpleanonymizer
 
 import java.sql.Connection
 
-import org.slf4j.LoggerFactory
-
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.Success
+
 import slick.dbio.SynchronousDatabaseAction
 import slick.jdbc.{GetResult, JdbcBackend}
 import slick.util.DumpInfo
 
 import org.postgresql.util.PGobject
+import org.slf4j.LoggerFactory
 import simpleanonymizer.SlickProfile.api._
-import simpleanonymizer.SlickProfile.quoteIdentifier
+import simpleanonymizer.SlickProfile.{quoteIdentifier, quoteQualified}
 
 /** Synchronous DBIO action that streams rows from a source database and batch-inserts them into the target via a pinned JDBC connection.
   *
@@ -36,8 +36,8 @@ private[simpleanonymizer] class CopyAction(
 
   override type StreamState = Null
 
-  private val sourceQualifiedTable = CopyAction.qualifiedTable(sourceDbContext.schema, tableName)
-  private val targetQualifiedTable = CopyAction.qualifiedTable(targetSchema, tableName)
+  private val sourceQualifiedTable = quoteQualified(sourceDbContext.schema, tableName)
+  private val targetQualifiedTable = quoteQualified(targetSchema, tableName)
 
   override def getDumpInfo = DumpInfo(name = "CopyAction", mainInfo = sourceQualifiedTable)
 
@@ -138,9 +138,6 @@ private[simpleanonymizer] class CopyAction(
   }
 }
 object CopyAction {
-  private[simpleanonymizer] def qualifiedTable(schema: String, tableName: String): String =
-    SlickProfile.quoteQualified(schema, tableName)
-
   private val logger = LoggerFactory.getLogger(getClass)
 
   /** Buffers rows and inserts them in batches via JDBC prepared statements.
