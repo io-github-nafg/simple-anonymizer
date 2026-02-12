@@ -41,6 +41,10 @@ class DbContext(val db: Database, val schema: String)(implicit ec: ExecutionCont
     }
   }
 
+  /** Foreign keys grouped into logical constraints (composite FK columns merged). */
+  lazy val logicalForeignKeys: Future[Seq[DbContext.LogicalFK]] =
+    allForeignKeys.map(DbContext.groupFKs)
+
   /** All column (name, data_type) pairs grouped by table name. Single bulk query serves both column-name and column-type lookups. */
   private lazy val allColumnInfo: Future[Map[String, Map[String, String]]] = {
     logger.info("Fetching columns...")
@@ -117,6 +121,24 @@ object DbContext                                                                
   case class SequenceInfo(tableName: String, columnName: String, sequenceName: String)
   object SequenceInfo {
     implicit val getSequenceInfo: GetResult[SequenceInfo] = GetResult(r => SequenceInfo(r.<<, r.<<, r.<<))
+  }
+
+  /** A logical FK constraint, possibly composite (multiple column pairs). */
+  case class LogicalFK(
+      name: Option[String],
+      fkTable: MQName,
+      pkTable: MQName,
+      columns: Seq[(String, String)] // (fkColumn, pkColumn) pairs
+  ) {
+    def isSelfRef: Boolean = pkTable == fkTable
+  }
+
+  private[simpleanonymizer] def groupFKs(fks: Seq[MForeignKey]): Seq[LogicalFK] = {
+    def toLogicalFK(group: Seq[MForeignKey]): LogicalFK = {
+      val sorted = group.sortBy(_.keySeq)
+      LogicalFK(sorted.head.fkName, sorted.head.fkTable, sorted.head.pkTable, sorted.map(fk => (fk.fkColumn, fk.pkColumn)))
+    }
+    fks.groupBy(fk => (fk.fkTable, fk.pkTable, fk.fkName)).values.map(toLogicalFK).toSeq
   }
 
   private[simpleanonymizer] def fkColumnsByTable(allFks: Seq[MForeignKey]): Map[String, Set[String]] =

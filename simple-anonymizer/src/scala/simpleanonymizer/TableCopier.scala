@@ -67,10 +67,9 @@ class TableCopier(source: DbContext, val target: DbContext)(implicit ec: Executi
       val seqs = allSeqs.filter(_.tableName == tableName)
       Future
         .traverse(seqs) { seq =>
-          val quotedSchema   = SlickProfile.quoteIdentifier(target.schema)
-          val quotedTable    = s"$quotedSchema.${SlickProfile.quoteIdentifier(tableName)}"
+          val quotedTable    = SlickProfile.quoteQualified(target.schema, tableName)
           val quotedColumn   = SlickProfile.quoteIdentifier(seq.columnName)
-          val quotedSequence = s"$quotedSchema.${SlickProfile.quoteIdentifier(seq.sequenceName)}"
+          val quotedSequence = SlickProfile.quoteQualified(target.schema, seq.sequenceName)
           target.db
             .run(
               sql"SELECT setval('#$quotedSequence', coalesce(max(#$quotedColumn), 0) + 1, false) FROM #$quotedTable"

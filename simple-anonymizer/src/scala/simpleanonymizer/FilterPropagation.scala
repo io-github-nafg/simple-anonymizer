@@ -2,9 +2,7 @@ package simpleanonymizer
 
 import scala.annotation.tailrec
 
-import slick.jdbc.meta.{MForeignKey, MQName}
-
-import simpleanonymizer.SlickProfile.quoteIdentifier
+import simpleanonymizer.SlickProfile.{quoteIdentifier, quoteQualified}
 
 /** Propagates WHERE clauses through foreign key relationships.
   *
@@ -12,63 +10,42 @@ import simpleanonymizer.SlickProfile.quoteIdentifier
   * filtered parent rows. This module generates the appropriate subquery-based WHERE clauses.
   */
 object FilterPropagation {
-  private def qualifiedName(mqName: MQName): String =
-    mqName.schema match {
-      case Some(s) => s"${quoteIdentifier(s)}.${quoteIdentifier(mqName.name)}"
-      case None    => quoteIdentifier(mqName.name)
-    }
 
-  /** A logical FK constraint, possibly composite (multiple column pairs). */
-  private case class LogicalFK(
-      fkTable: MQName,
-      pkTable: MQName,
-      columns: Seq[(String, String)] // (fkColumn, pkColumn) pairs
-  ) {
-    def isSelfRef: Boolean = pkTable.name == fkTable.name
-  }
-
-  private def groupFKs(fks: Seq[MForeignKey]): Seq[LogicalFK] = {
-    def toLogicalFK(group: Seq[MForeignKey]): LogicalFK = {
-      val sorted = group.sortBy(_.keySeq)
-      LogicalFK(sorted.head.fkTable, sorted.head.pkTable, sorted.map(fk => (fk.fkColumn, fk.pkColumn)))
-    }
-    val (named, unnamed)                                = fks.partition(_.fkName.isDefined)
-    val namedGroups                                     = named.groupBy(fk => (fk.fkTable.name, fk.pkTable.name, fk.fkName)).values.map(toLogicalFK)
-    val unnamedGroups                                   = unnamed.map(fk => toLogicalFK(Seq(fk)))
-    (namedGroups ++ unnamedGroups).toSeq
-  }
-
-  private def quotedCols(fk: LogicalFK): (Seq[String], Seq[String]) =
+  private def quotedCols(fk: DbContext.LogicalFK): (Seq[String], Seq[String]) =
     (fk.columns.map(c => quoteIdentifier(c._1)), fk.columns.map(c => quoteIdentifier(c._2)))
 
   private def sqlTuple(cols: Seq[String]): String =
     if (cols.size == 1) cols.head else cols.mkString("(", ", ", ")")
 
-  private def inExpr(fk: LogicalFK, parentClause: TableSpec.WhereClause): TableSpec.WhereClause.Single = {
+  private def inSubquery(cols: Seq[String], subquery: String): String =
+    s"${sqlTuple(cols)} IN ($subquery)"
+
+  private def recursiveCte(name: String, cols: String, base: String, recursive: String): String =
+    s"WITH RECURSIVE $name($cols) AS ($base UNION $recursive) SELECT $cols FROM $name"
+
+  private def inExpr(fk: DbContext.LogicalFK, parentClause: TableSpec.WhereClause): TableSpec.WhereClause.Single = {
     val (fkCols, pkCols) = quotedCols(fk)
-    TableSpec.WhereClause.Single(
-      s"${sqlTuple(fkCols)} IN (SELECT ${pkCols.mkString(", ")} FROM ${qualifiedName(fk.pkTable)} WHERE ${parentClause.sql})"
-    )
+    val subquery         = s"SELECT ${pkCols.mkString(", ")} FROM ${quoteQualified(fk.pkTable)} WHERE ${parentClause.sql}"
+    TableSpec.WhereClause.Single(inSubquery(fkCols, subquery))
   }
 
   private def selfRefCteExpr(
-      fk: LogicalFK,
+      fk: DbContext.LogicalFK,
       baseFilter: TableSpec.WhereClause
   ): TableSpec.WhereClause.Single = {
-    val table            = qualifiedName(fk.fkTable)
+    val table            = quoteQualified(fk.fkTable)
     val (fkCols, pkCols) = quotedCols(fk)
     val pkColList        = pkCols.mkString(", ")
     val nullCheck        = fkCols.map(c => s"$c IS NULL").mkString(" AND ")
     val joinCond         = fkCols.zip(pkCols).map { case (fc, pc) => s"t.$fc = r.$pc" }.mkString(" AND ")
     val filterSql        = baseFilter.sql
-    TableSpec.WhereClause.Single(
-      s"($nullCheck OR ${sqlTuple(fkCols)} IN (" +
-        s"WITH RECURSIVE reachable($pkColList) AS (" +
-        s"SELECT $pkColList FROM $table WHERE ($filterSql) AND $nullCheck " +
-        s"UNION " +
-        s"SELECT ${pkCols.map(c => s"t.$c").mkString(", ")} FROM $table t JOIN reachable r ON $joinCond WHERE ($filterSql)" +
-        s") SELECT $pkColList FROM reachable))"
+    val cte              = recursiveCte(
+      "reachable",
+      pkColList,
+      base = s"SELECT $pkColList FROM $table WHERE ($filterSql) AND $nullCheck",
+      recursive = s"SELECT ${pkCols.map(c => s"t.$c").mkString(", ")} FROM $table t JOIN reachable r ON $joinCond WHERE ($filterSql)"
     )
+    TableSpec.WhereClause.Single(s"($nullCheck OR ${inSubquery(fkCols, cte)})")
   }
 
   /** Compute propagated WHERE clauses for all tables based on root filters and FK relationships.
@@ -85,7 +62,7 @@ object FilterPropagation {
     * @param tables
     *   Tables in topological order (parents before children)
     * @param fks
-    *   All foreign key relationships
+    *   Logical foreign key constraints (composite columns pre-grouped)
     * @param explicitClauses
     *   Lookup function returning the user-provided [[TableSpec.WhereClause]] for a table, or None
     * @return
@@ -93,10 +70,9 @@ object FilterPropagation {
     */
   def computePropagatedFilters(
       tables: Seq[String],
-      fks: Seq[MForeignKey]
+      fks: Seq[DbContext.LogicalFK]
   )(explicitClauses: String => Option[TableSpec.WhereClause]): Map[String, TableSpec.WhereClause] = {
-    val logicalFks = groupFKs(fks)
-    val fksByChild = logicalFks.groupBy(_.fkTable.name).withDefaultValue(Nil)
+    val fksByChild = fks.groupBy(_.fkTable.name).withDefaultValue(Nil)
 
     @tailrec
     def loop(remaining: List[String], accumulated: Map[String, TableSpec.WhereClause]): Map[String, TableSpec.WhereClause] =

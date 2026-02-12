@@ -21,11 +21,15 @@ class FilterPropagationTest extends AnyFunSpec with TypeCheckedTripleEquals {
       deferrability = 0
     )
 
+  private def propagate(tables: Seq[String], fks: Seq[MForeignKey])(
+      explicitClauses: String => Option[TableSpec.WhereClause]
+  ) =
+    FilterPropagation.computePropagatedFilters(tables, DbContext.groupFKs(fks))(explicitClauses)
+
   describe("computePropagatedFilters") {
     it("does not include explicit filters in the output") {
       val tables  = Seq("users")
-      val fks     = Seq.empty[MForeignKey]
-      val filters = FilterPropagation.computePropagatedFilters(tables, fks) {
+      val filters = propagate(tables, Seq.empty) {
         case "users" => Some(TableSpec.WhereClause.Single("active = true"))
         case _       => None
       }
@@ -39,7 +43,7 @@ class FilterPropagationTest extends AnyFunSpec with TypeCheckedTripleEquals {
         fk("order_items", "order_id", "orders", "id")
       )
       val filters =
-        FilterPropagation.computePropagatedFilters(tables, fks) {
+        propagate(tables, fks) {
           case "users" => Some(TableSpec.WhereClause.Single("active = true"))
           case _       => None
         }
@@ -51,8 +55,7 @@ class FilterPropagationTest extends AnyFunSpec with TypeCheckedTripleEquals {
 
     it("omits tables with no filter") {
       val tables  = Seq("users", "categories")
-      val fks     = Seq.empty[MForeignKey]
-      val filters = FilterPropagation.computePropagatedFilters(tables, fks) {
+      val filters = propagate(tables, Seq.empty) {
         case "users" => Some(TableSpec.WhereClause.Single("active = true"))
         case _       => None
       }
@@ -67,7 +70,7 @@ class FilterPropagationTest extends AnyFunSpec with TypeCheckedTripleEquals {
         fk("order_items", "product_id", "products", "id")
       )
       val filters =
-        FilterPropagation.computePropagatedFilters(tables, fks) {
+        propagate(tables, fks) {
           case "orders"   => Some(TableSpec.WhereClause.Single("status = 'active'"))
           case "products" => Some(TableSpec.WhereClause.Single("available = true"))
           case _          => None
@@ -83,7 +86,7 @@ class FilterPropagationTest extends AnyFunSpec with TypeCheckedTripleEquals {
       val tables  = Seq("users", "orders")
       val fks     = Seq(fk("orders", "user_id", "users", "id"))
       val filters =
-        FilterPropagation.computePropagatedFilters(tables, fks) {
+        propagate(tables, fks) {
           case "users" => Some(TableSpec.WhereClause.Multiple("active = true", Seq("role = 'admin'")))
           case _       => None
         }

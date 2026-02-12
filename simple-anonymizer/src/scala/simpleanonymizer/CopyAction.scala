@@ -139,7 +139,7 @@ private[simpleanonymizer] class CopyAction(
 }
 object CopyAction {
   private[simpleanonymizer] def qualifiedTable(schema: String, tableName: String): String =
-    s"${quoteIdentifier(schema)}.${quoteIdentifier(tableName)}"
+    SlickProfile.quoteQualified(schema, tableName)
 
   private val logger = LoggerFactory.getLogger(getClass)
 
