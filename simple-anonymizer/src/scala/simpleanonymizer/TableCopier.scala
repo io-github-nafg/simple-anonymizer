@@ -40,8 +40,12 @@ class TableCopier(source: DbContext, val target: DbContext)(implicit ec: Executi
     *   nullable, DEFAULT) can be omitted. If a required column is missing, the INSERT will fail with a database error at runtime.
     *
     * <b>Note:</b> [[DbCopier]] automatically adds passthrough columns for any database columns not in the spec (including PKs and FKs).
+    *
+    * @param snapshotId
+    *   Optional PostgreSQL snapshot identifier (from `pg_export_snapshot()`). When provided, the source connection imports this snapshot to ensure consistent
+    *   reads across parallel table copies.
     */
-  def run(tableName: String, tableSpec: TableSpec): Future[Int] = {
+  def run(tableName: String, tableSpec: TableSpec, snapshotId: Option[String] = None): Future[Int] = {
     def columnTypesFut: Future[Seq[(OutputColumn, String)]] =
       source.columnTypesFor(tableName).flatMap { typeMap =>
         val missingColumns = tableSpec.columnNames.filterNot(typeMap.contains)
@@ -69,7 +73,8 @@ class TableCopier(source: DbContext, val target: DbContext)(implicit ec: Executi
                            targetSchema = target.schema,
                            tableName = tableName,
                            tableSpec = tableSpec,
-                           columns = columnTypes
+                           columns = columnTypes,
+                           snapshotId = snapshotId
                          )
           count       <- target.db.run(copyAction.transactionally)
           _           <- resetSequences(tableName)

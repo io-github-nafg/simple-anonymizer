@@ -1,11 +1,14 @@
 package simpleanonymizer
 
+import java.sql.Connection
+
 import org.slf4j.LoggerFactory
 
 import slick.jdbc.meta.MTable
 
 import simpleanonymizer.SlickProfile.api._
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Failure, Success, Using}
 
 /** High-level orchestrator for copying a database snapshot with subsetting and anonymization.
   *
@@ -53,7 +56,8 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
 
   private def copyTablesByLevel(
       levels: Seq[Seq[MTable]],
-      specs: Map[String, TableSpec]
+      specs: Map[String, TableSpec],
+      snapshotId: Option[String]
   ): Future[Map[String, Int]] = {
     val totalTables = levels.map(_.size).sum
     logger.info("Copying {} tables in {} levels...", totalTables, levels.size)
@@ -70,7 +74,7 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
             Future.successful(tableName -> 0)
           } else
             tableCopier
-              .run(tableName, specs.getOrElse(tableName, TableSpec(Seq.empty)))
+              .run(tableName, specs.getOrElse(tableName, TableSpec(Seq.empty)), snapshotId)
               .map(count => tableName -> count)
         }
         Future.sequence(futures).map(results => acc ++ results)
@@ -103,6 +107,14 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
     * means PK and FK columns do not need to be listed — they are included automatically. If a PK or FK column ''is'' listed in the spec, it overrides the
     * automatic passthrough for that column.
     *
+    * ==Snapshot isolation==
+    *
+    * To ensure all tables see a consistent point-in-time view of the source database, this method exports a PostgreSQL snapshot (`pg_export_snapshot()`) on a
+    * dedicated coordinator connection held in a REPEATABLE READ transaction. Each worker connection imports this snapshot via `SET TRANSACTION SNAPSHOT` before
+    * reading. The coordinator connection remains open for the duration of the copy to keep the snapshot valid.
+    *
+    * Requires PostgreSQL 9.2+.
+    *
     * @param tableSpecs
     *   Each entry is a table name paired with a TableSpec created via `TableSpec.select { row => ... }`. Only non-PK/non-FK columns need to be specified; PK
     *   and FK columns are passed through automatically. Use `skippedTables` constructor parameter to skip tables entirely.
@@ -115,17 +127,37 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
 
     val validator = CoverageValidator(sourceDbContext)
 
-    for {
-      tables       <- sourceDbContext.allTables
-      fks          <- sourceDbContext.allForeignKeys
-      logicalFks   <- sourceDbContext.logicalForeignKeys
-      pks          <- sourceDbContext.allPrimaryKeys
-      tableLevels   = TableSorter(tables, fks)
-      orderedTables = tableLevels.flatten
-      filters       = FilterPropagation.computePropagatedFilters(orderedTables.map(_.name.name), logicalFks)(t => tableSpecsMap.get(t).flatMap(_.whereClause))
-      updatedSpecs  = addKeysAndSubsetting(tableSpecsMap, pks, DbContext.fkColumnsByTable(fks), filters)
-      _            <- validator.validate(tables.map(_.name.name), skippedTables, updatedSpecs)
-      result       <- copyTablesByLevel(tableLevels, updatedSpecs)
-    } yield result
+    // Export a consistent snapshot from the source database.
+    // The coordinator connection must remain open (in its REPEATABLE READ transaction)
+    // for the duration of the copy so that worker connections can import the snapshot.
+    val coordinatorConn = sourceDb.source.createConnection()
+    Using(coordinatorConn.createStatement()) { stmt =>
+      coordinatorConn.setAutoCommit(false)
+      coordinatorConn.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ)
+      val rs = stmt.executeQuery("SELECT pg_export_snapshot()")
+      rs.next()
+      rs.getString(1)
+    } match {
+      case Failure(e)          =>
+        coordinatorConn.close()
+        Future.failed(e)
+      case Success(snapshotId) =>
+        logger.info("Exported snapshot: {}", snapshotId)
+        (for {
+          tables       <- sourceDbContext.allTables
+          fks          <- sourceDbContext.allForeignKeys
+          logicalFks   <- sourceDbContext.logicalForeignKeys
+          pks          <- sourceDbContext.allPrimaryKeys
+          tableLevels   = TableSorter(tables, fks)
+          orderedTables = tableLevels.flatten
+          filters       =
+            FilterPropagation.computePropagatedFilters(orderedTables.map(_.name.name), logicalFks)(t => tableSpecsMap.get(t).flatMap(_.whereClause))
+          updatedSpecs  = addKeysAndSubsetting(tableSpecsMap, pks, DbContext.fkColumnsByTable(fks), filters)
+          _            <- validator.validate(tables.map(_.name.name), skippedTables, updatedSpecs)
+          result       <- copyTablesByLevel(tableLevels, updatedSpecs, Some(snapshotId))
+        } yield result).andThen { case _ =>
+          coordinatorConn.close()
+        }
+    }
   }
 }

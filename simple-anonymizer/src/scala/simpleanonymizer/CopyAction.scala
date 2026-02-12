@@ -8,7 +8,7 @@ import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.Success
 
 import slick.dbio.SynchronousDatabaseAction
-import slick.jdbc.{GetResult, JdbcBackend}
+import slick.jdbc.{GetResult, JdbcBackend, TransactionIsolation}
 import slick.util.DumpInfo
 
 import org.postgresql.util.PGobject
@@ -22,13 +22,18 @@ import simpleanonymizer.SlickProfile.{quoteIdentifier, quoteQualified}
   * batches by [[CopyAction.BatchInserter]], and inserted using JDBC prepared statements on the target connection provided by the action context.
   *
   * Both SELECT and INSERT statements use schema-qualified table names to avoid ambiguity when source and target use different schemas.
+  *
+  * @param snapshotId
+  *   When provided, the source transaction imports this snapshot via `SET TRANSACTION SNAPSHOT` before streaming rows, ensuring all parallel table copies see a
+  *   consistent point-in-time view of the source database.
   */
 private[simpleanonymizer] class CopyAction(
     sourceDbContext: DbContext,
     targetSchema: String,
     tableName: String,
     tableSpec: TableSpec,
-    columns: Seq[(OutputColumn, String)]
+    columns: Seq[(OutputColumn, String)],
+    snapshotId: Option[String] = None
 )(implicit executionContext: ExecutionContext)
     extends SynchronousDatabaseAction[Int, NoStream, JdbcBackend#JdbcActionContext, JdbcBackend#JdbcStreamingActionContext, Effect.All] {
 
@@ -121,14 +126,17 @@ private[simpleanonymizer] class CopyAction(
 
     Await.result(
       for {
-        sql     <- insertSql
-        inserter = new CopyAction.BatchInserter(tableName, columns, sql, batchSize, totalRowsFut, context.connection)
-        _       <-
+        sql          <- insertSql
+        inserter      = new CopyAction.BatchInserter(tableName, columns, sql, batchSize, totalRowsFut, context.connection)
+        snapshotSetup = snapshotId match {
+                          case None     => DBIO.unit
+                          case Some(id) => sqlu"SET TRANSACTION SNAPSHOT '#$id'".void
+                        }
+        _            <-
           sourceDbContext.db
             .stream(
-              sql"#$selectSql"
-                .as[RawRow]
-                .transactionally
+              (snapshotSetup >> sql"#$selectSql".as[RawRow]).transactionally
+                .withTransactionIsolation(TransactionIsolation.RepeatableRead)
                 .withStatementParameters(fetchSize = batchSize)
             )
             .foreach(inserter.receiveBatch)
