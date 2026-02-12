@@ -116,6 +116,44 @@ class DbCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll
         _      <- assert(orders.forall(_ <= 3), s"Only orders for users 1-3 should be copied, got: $orders")
       } yield succeed
     }
+
+    it("handles self-referencing FK with cross-table filter propagation") { fixture =>
+      val copier   = new DbCopier(
+        sourceDb,
+        fixture.targetDb,
+        skippedTables = Set("profiles", "employees", "tree_nodes")
+      )
+      val targetDb = fixture.targetDb
+
+      for {
+        result      <- copier.run(
+                         "users"       ->
+                           TableSpec
+                             .select(row => Seq(row.first_name, row.last_name, row.email))
+                             .where("id <= 2"),
+                         "orders"      -> TableSpec.select(row => Seq(row.status, row.total)),
+                         "order_items" -> TableSpec.select(row => Seq(row.product_name, row.quantity)),
+                         "categories"  -> TableSpec.select(row => Seq(row.name))
+                       )
+        _           <- assert(result("users") == 2)
+        // Categories owned by users 1-2 with valid parent chains should be copied.
+        // Fiction (id=9, owner=1, parent=Books which has owner=3) must be excluded:
+        // it passes the cross-table filter but its parent doesn't, so the self-ref CTE excludes it.
+        categoryIds <- targetDb.run(sql"SELECT id FROM categories ORDER BY id".as[Int])
+        _           <- assert(
+                         categoryIds.toSet == Set(1, 2, 4, 5, 6, 7, 8),
+                         s"Only categories with valid owner and parent chain should be copied, got: $categoryIds"
+                       )
+        // Order items should only reference categories that were copied.
+        // Poetry Anthology (order 3 = user 2, category 9 = Fiction) passes the orders filter
+        // but should be excluded because Fiction was excluded from categories.
+        poetryItems <- targetDb.run(sql"SELECT product_name FROM order_items WHERE category_id = 9".as[String])
+        _           <- assert(
+                         poetryItems.isEmpty,
+                         s"Order items for excluded category (Fiction) should not be copied, got: $poetryItems"
+                       )
+      } yield succeed
+    }
   }
 
   describe("nulled and fixed values") {
@@ -174,7 +212,11 @@ class DbCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll
   describe("JSON column transformation") {
     it("anonymizes fields within JSON arrays while preserving structure") { fixture =>
       val copier   =
-        new DbCopier(sourceDb, fixture.targetDb, skippedTables = Set("orders", "order_items", "employees", "tree_nodes"))
+        new DbCopier(
+          sourceDb,
+          fixture.targetDb,
+          skippedTables = Set("orders", "order_items", "employees", "tree_nodes")
+        )
       val targetDb = fixture.targetDb
 
       for {
@@ -200,7 +242,8 @@ class DbCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll
 
   describe("type preservation") {
     it("preserves DECIMAL and INTEGER types through passthrough") { fixture =>
-      val copier   = new DbCopier(sourceDb, fixture.targetDb, skippedTables = Set("profiles", "employees", "tree_nodes"))
+      val copier   =
+        new DbCopier(sourceDb, fixture.targetDb, skippedTables = Set("profiles", "employees", "tree_nodes"))
       val targetDb = fixture.targetDb
 
       for {
@@ -281,6 +324,7 @@ class DbCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll
                           )
         originalName   <- targetDb.run(sql"SELECT first_name FROM users WHERE id = 1".as[String].head)
         _              <- assert(originalName == "John")
+        catCountBefore <- targetDb.run(sql"SELECT COUNT(*) FROM categories".as[Int].head)
         // Second copy with doUpdate: should update, not fail
         _              <- copier.run(
                             "categories" ->
@@ -298,10 +342,9 @@ class DbCopierIntegrationTest extends FixtureAsyncFunSpec with BeforeAndAfterAll
         // Verify count didn't change (no duplicate)
         userCount      <- targetDb.run(sql"SELECT COUNT(*) FROM users WHERE id = 1".as[Int].head)
         _              <- assert(userCount == 1)
-        // Verify categories weren't duplicated
-        categoryCount  <- targetDb.run(sql"SELECT COUNT(*) FROM categories".as[Int].head)
-        originalCatCnt <- sourceDb.run(sql"SELECT COUNT(*) FROM categories".as[Int].head)
-        _              <- assert(categoryCount == originalCatCnt)
+        // Verify categories weren't duplicated (count same as first copy)
+        catCountAfter  <- targetDb.run(sql"SELECT COUNT(*) FROM categories".as[Int].head)
+        _              <- assert(catCountAfter == catCountBefore)
       } yield succeed
     }
 

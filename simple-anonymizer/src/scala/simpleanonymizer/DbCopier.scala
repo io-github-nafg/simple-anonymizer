@@ -118,10 +118,11 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
     for {
       tables       <- sourceDbContext.allTables
       fks          <- sourceDbContext.allForeignKeys
+      logicalFks   <- sourceDbContext.logicalForeignKeys
       pks          <- sourceDbContext.allPrimaryKeys
       tableLevels   = TableSorter(tables, fks)
       orderedTables = tableLevels.flatten
-      filters       = FilterPropagation.computePropagatedFilters(orderedTables.map(_.name.name), fks)(t => tableSpecsMap.get(t).flatMap(_.whereClause))
+      filters       = FilterPropagation.computePropagatedFilters(orderedTables.map(_.name.name), logicalFks)(t => tableSpecsMap.get(t).flatMap(_.whereClause))
       updatedSpecs  = addKeysAndSubsetting(tableSpecsMap, pks, DbContext.fkColumnsByTable(fks), filters)
       _            <- validator.validate(tables.map(_.name.name), skippedTables, updatedSpecs)
       result       <- copyTablesByLevel(tableLevels, updatedSpecs)
