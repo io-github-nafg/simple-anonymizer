@@ -48,7 +48,7 @@ object Lens {
     protected def modifyJson(f: String => String): Json => Json = { json =>
       json.asString match {
         case None      =>
-          logger.warn("Expected string but got {}", json.name)
+          logger.warn(s"Expected string but got ${json.name}")
           json
         case Some(str) =>
           val transformed = f(str)
@@ -63,7 +63,7 @@ object Lens {
       parse(jsonStr) match {
         case Right(json) => modifyJson(f)(json).noSpaces
         case Left(err)   =>
-          logger.warn("Failed to parse JSON: {}", err.message)
+          logger.warn(s"Failed to parse JSON: ${err.message}")
           jsonStr
       }
     }
@@ -85,7 +85,7 @@ object Lens {
     protected def modifyJson(f: String => String): Json => Json = { json =>
       json.asObject match {
         case None      =>
-          logger.warn("Expected object but got {}", json.name)
+          logger.warn(s"Expected object but got ${json.name}")
           json
         case Some(obj) =>
           obj(fieldName) match {
@@ -93,7 +93,7 @@ object Lens {
               val transformed = inner.modifyJson(f)(fieldValue)
               obj.add(fieldName, transformed).asJson
             case None             =>
-              logger.warn("Field '{}' not found in JSON object", fieldName)
+              logger.warn(s"Field '$fieldName' not found in JSON object")
               json
           }
       }
@@ -109,7 +109,7 @@ object Lens {
     protected def modifyJson(f: String => String): Json => Json = { json =>
       json.asArray match {
         case None      =>
-          logger.warn("Expected array but got {}", json.name)
+          logger.warn(s"Expected array but got ${json.name}")
           json
         case Some(arr) =>
           val transformed = arr.map(elementLens.modifyJson(f))

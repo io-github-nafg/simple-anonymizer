@@ -43,7 +43,7 @@ class TableCopier(source: DbContext, val target: DbContext)(implicit ec: Executi
 
     val transformedColumns = tableSpec.columns.collect { case c if !c.isInstanceOf[OutputColumn.SourceColumn] => c.name }
     if (transformedColumns.nonEmpty)
-      logger.info("Transforming columns of {}: {}", tableName, transformedColumns.mkString(", "))
+      logger.info(s"Transforming columns of $tableName: ${transformedColumns.mkString(", ")}")
 
     selfRefConstraints.restoringDeferrability { constraints =>
       for {
@@ -77,7 +77,7 @@ class TableCopier(source: DbContext, val target: DbContext)(implicit ec: Executi
                 .head
             )
             .map { newVal =>
-              logger.info("Reset sequence {} to {} for {}.{}", seq.sequenceName, newVal, tableName, seq.columnName)
+              logger.info(s"Reset sequence ${seq.sequenceName} to $newVal for $tableName.${seq.columnName}")
             }
         }
         .map(_ => ())

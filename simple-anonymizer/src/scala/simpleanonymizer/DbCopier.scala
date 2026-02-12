@@ -56,7 +56,7 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
       specs: Map[String, TableSpec]
   ): Future[Map[String, Int]] = {
     val totalTables = levels.map(_.size).sum
-    logger.info("Copying {} tables in {} levels...", totalTables, levels.size)
+    logger.info(s"Copying $totalTables tables in ${levels.size} levels...")
 
     levels.foldLeft(Future.successful(Map.empty[String, Int])) { (accFut, level) =>
       accFut.flatMap { acc =>
@@ -66,7 +66,7 @@ class DbCopier(sourceDb: Database, targetDb: Database, schema: String = "public"
         val futures = level.map { table =>
           val tableName = table.name.name
           if (skippedTables.contains(tableName)) {
-            logger.info("Skipping table: {}", tableName)
+            logger.info(s"Skipping table: $tableName")
             Future.successful(tableName -> 0)
           } else
             tableCopier

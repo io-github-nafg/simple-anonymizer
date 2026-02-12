@@ -57,8 +57,7 @@ object TableSorter {
         if (newlyAssigned.isEmpty) {
           // Circular dependency detected - no progress possible
           logger.warn(
-            "Circular dependencies detected for tables: {}. These tables will not be copied.",
-            unassigned.mkString(", ")
+            s"Circular dependencies detected for tables: ${unassigned.mkString(", ")}. These tables will not be copied."
           )
           levels
         } else

@@ -41,7 +41,7 @@ private[simpleanonymizer] class SelfRefConstraints(db: Database, schema: String,
         val selfRefFks = allFks.filter(fk => fk.pkTable.name == fk.fkTable.name)
 
         if (selfRefFks.nonEmpty)
-          logger.info("Self-ref constraints for {}: {}", tableName, selfRefFks.flatMap(_.fkName).mkString(", "))
+          logger.info(s"Self-ref constraints for $tableName: ${selfRefFks.flatMap(_.fkName).mkString(", ")}")
 
         selfRefFks
       }

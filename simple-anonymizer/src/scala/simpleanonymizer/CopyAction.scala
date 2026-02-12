@@ -78,11 +78,11 @@ private[simpleanonymizer] class CopyAction(
         limit.fold("")(n => s" LIMIT $n")
     }
 
-    logger.debug("SELECT: {}", selectSql)
+    logger.debug(s"SELECT: $selectSql")
 
     val totalRowsFut = sourceDbContext.db.run(sql"SELECT count(*) FROM (#$selectSql) t".as[Int].head)
-    totalRowsFut.foreach(n => logger.info("Table {} has {} rows", tableName, n))
-    logger.info("Copying table: {}", tableName)
+    totalRowsFut.foreach(n => logger.info(s"Table $tableName has $n rows"))
+    logger.info(s"Copying table: $tableName")
 
     val insertSql = {
       val columnList                                                              = columns.map(c => quoteIdentifier(c._1.name)).mkString(", ")
@@ -212,7 +212,7 @@ object CopyAction {
         buffer.clear()
         val now = System.currentTimeMillis()
         if (now - lastLogTime >= 5000) {
-          logger.info("Inserted {}{} rows into {}...", count, totalSuffix, quotedTable)
+          logger.info(s"Inserted $count$totalSuffix rows into $quotedTable...")
           lastLogTime = now
         }
       }
@@ -223,7 +223,7 @@ object CopyAction {
       try {
         if (buffer.nonEmpty)
           count += insertBatch(buffer.toVector)
-        logger.info("Copied {}{} rows from {}", count, totalSuffix, quotedTable)
+        logger.info(s"Copied $count$totalSuffix rows from $quotedTable")
         count
       } finally
         stmt.close()
