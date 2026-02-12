@@ -80,7 +80,7 @@ class ConstraintDeferrer(db: Database)(implicit ec: ExecutionContext) {
       val tableNames = constraints.map(_.fkTable.name).distinct.mkString(", ")
       logger.info("Deferring constraints for {}: {}", tableNames, constraintNames.mkString(", "))
       db.run(deferAll(constraints)).flatMap { _ =>
-        body.transformWith { outcome =>
+        Future.delegate(body).transformWith { outcome =>
           db.run(restoreDeferrability(constraints)).transform(_ => outcome)
         }
       }
