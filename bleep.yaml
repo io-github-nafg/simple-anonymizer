@@ -29,7 +29,7 @@ projects:
     dependencies:
     - org.scalatest::scalatest:3.2.19
     - org.slf4j:slf4j-simple:2.0.16
-    - io.github.nafg::slick-additions-testcontainers:0.16.2
+    - io.github.nafg::slick-additions-testcontainers:0.17.0
     - org.testcontainers:testcontainers:2.0.3
     dependsOn: simple-anonymizer
     extends: template-cross-all
