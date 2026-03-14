@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: bleep-build/bleep-setup-action@0.0.2
-      - uses: coursier/cache-action@v6
+      - uses: coursier/cache-action@v8
         with:
           extraFiles: bleep.yaml
       - name: Test
