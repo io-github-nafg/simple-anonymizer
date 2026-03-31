@@ -21,13 +21,13 @@ projects:
     extends: template-cross-all
   tests:
     dependencies:
-    - org.scalatest::scalatest:3.2.19
+    - org.scalatest::scalatest:3.2.20
     dependsOn: simple-anonymizer
     extends: template-cross-all
     isTestProject: true
   integration-tests:
     dependencies:
-    - org.scalatest::scalatest:3.2.19
+    - org.scalatest::scalatest:3.2.20
     - org.slf4j:slf4j-simple:2.0.16
     - io.github.nafg::slick-additions-testcontainers:0.16.2
     - org.testcontainers:testcontainers:2.0.3
