@@ -30,7 +30,7 @@ projects:
     - org.scalatest::scalatest:3.2.19
     - org.slf4j:slf4j-simple:2.0.16
     - io.github.nafg::slick-additions-testcontainers:0.16.2
-    - org.testcontainers:testcontainers:2.0.3
+    - org.testcontainers:testcontainers:2.0.5
     dependsOn: simple-anonymizer
     extends: template-cross-all
     isTestProject: true
