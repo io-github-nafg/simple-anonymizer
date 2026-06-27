@@ -12,7 +12,7 @@ projects:
     dependencies:
     - io.circe::circe-core:0.14.15
     - io.circe::circe-parser:0.14.15
-    - net.datafaker:datafaker:2.5.3
+    - net.datafaker:datafaker:2.7.0
     - org.postgresql:postgresql:42.7.9
     - com.typesafe.slick::slick:3.6.1
     - com.github.tminglei::slick-pg:0.23.1
