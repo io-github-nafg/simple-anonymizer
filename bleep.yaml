@@ -13,7 +13,7 @@ projects:
     - io.circe::circe-core:0.14.15
     - io.circe::circe-parser:0.14.15
     - net.datafaker:datafaker:2.5.3
-    - org.postgresql:postgresql:42.7.9
+    - org.postgresql:postgresql:42.7.13
     - com.typesafe.slick::slick:3.6.1
     - com.github.tminglei::slick-pg:0.23.1
     - com.github.tminglei::slick-pg_circe-json:0.23.1
