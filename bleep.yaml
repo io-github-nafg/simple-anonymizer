@@ -10,7 +10,7 @@ projects:
     - template-scala-3
   simple-anonymizer:
     dependencies:
-    - io.circe::circe-core:0.14.15
+    - io.circe::circe-core:0.14.17
     - io.circe::circe-parser:0.14.15
     - net.datafaker:datafaker:2.5.3
     - org.postgresql:postgresql:42.7.9
